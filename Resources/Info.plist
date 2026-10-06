@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>ThUNER</string>
+	<key>CFBundleExecutable</key>
+	<string>Thuner</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.idallas.thuner</string>
+	<key>CFBundleName</key>
+	<string>ThUNER</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>202610050202</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>With System Audio as the input, ThUNER listens to what this Mac is playing (a browser, YouTube Music, any app) to identify it.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_tuneshine._tcp</string>
+		<string>_thuner._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>ThUNER finds and updates your Tuneshine, and coordinates with ThUNER on your other Macs so the turntable Mac gets the display first.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ThUNER listens to the turntable or room audio to identify what's playing.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://idallas.com/software/thuner/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ezhfI+36NRNe53SCAErV74rJiNtoqEl9d7MACR32Wwc=</string>
+</dict>
+</plist>

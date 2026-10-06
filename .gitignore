@@ -1,0 +1,8 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+# Per-machine Claude Code settings.
+.claude/settings.local.json
+# This Mac's signing identity, stats and deploy settings (see Scripts/config.example.sh).
+Scripts/config.local.sh
