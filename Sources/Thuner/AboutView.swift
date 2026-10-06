@@ -26,12 +26,14 @@ struct AboutView: View {
                 Button("Check for Updates…") { model.updater.checkForUpdates() }
                 Link("Website", destination: URL(string: "https://idallas.com/software/thuner/")!)
                     .buttonStyle(.bordered)
+                Link("Source on GitHub", destination: URL(string: "https://github.com/idallas/thuner")!)
+                    .buttonStyle(.bordered)
             }
 
             Divider()
 
             VStack(spacing: 3) {
-                Text("Made by Dallas").font(.footnote.weight(.medium))
+                Text("Made by Dallas · Open source under the MIT License").font(.footnote.weight(.medium))
                 Text("Song recognition by ShazamKit · Updates by Sparkle · Artwork from Apple Music and Spotify")
                     .font(.caption2).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
