@@ -1,6 +1,14 @@
 import AVFoundation
 import CoreAudio
+import ThunerCore
 import os
+
+/// Where shared audio goes: each capture start hands it a fresh packetizer (nil on stop), and the capture thread
+/// calls `packetsReady` whenever it finishes packets.
+protocol StreamSink: AnyObject, Sendable {
+    func attach(_ packetizer: Packetizer?, source: String?)
+    func packetsReady()
+}
 
 /// The last few seconds of mono audio, at a sample rate ShazamKit accepts.
 final class SampleRing: @unchecked Sendable {
@@ -51,6 +59,10 @@ final class AudioCapture: @unchecked Sendable {
         /// For System Audio: which apps to capture, and the bundle IDs of the chosen ones.
         var systemAudioMode = SystemAudioTap.Mode.all
         var systemAudioApps: Set<String> = []
+        /// Sharing this input with other ThUNERs: frames per packet, and the input's I/O buffer to ask for (smaller
+        /// is lower latency, at a little more CPU). Nil when not sharing.
+        var streamFrames: Int?
+        var streamIOBufferFrames = 128
     }
 
     enum CaptureError: LocalizedError {
@@ -76,12 +88,16 @@ final class AudioCapture: @unchecked Sendable {
     var onLevel: ((Double) -> Void)?
     /// The engine stopped on its own (device unplugged, format change). Called on the main queue.
     var onInterrupted: (() -> Void)?
+    /// Gets the audio when `Config.streamFrames` is set.
+    var streamSink: StreamSink?
 
     private var engine: AVAudioEngine?
     private var configObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.idallas.thuner", category: "capture")
 
     private(set) var activeDeviceName: String?
+    /// Reads the input directly for sharing, alongside the engine (which can't deliver small buffers).
+    private var inputTap: DeviceInputTap?
     /// The system audio tap while "System Audio" is the input; released (and torn down) on stop.
     private var systemTap: SystemAudioTap?
     /// For a filtered System Audio capture: the process objects it covers, and the filter, so a chosen app
@@ -180,6 +196,20 @@ final class AudioCapture: @unchecked Sendable {
         try engine.start()
         self.engine = engine
         ring.clear()
+        if let frames = config.streamFrames, let streamSink, let device {
+            do {
+                let tap = try DeviceInputTap(device: device.id, firstChannel: config.firstChannel,
+                                             ioBufferFrames: config.streamIOBufferFrames,
+                                             packetizer: { Packetizer(framesPerPacket: frames, sampleRate: $0) },
+                                             ready: { streamSink.packetsReady() })
+                try tap.start()
+                inputTap = tap
+                streamSink.attach(tap.packetizer, source: device.name)
+                log.notice("Sharing \(device.name, privacy: .public), I/O buffer \(tap.ioBufferFrames) frames")
+            } catch {
+                log.error("Couldn't share the input: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         log.notice("Capturing from \(self.activeDeviceName ?? "default input", privacy: .public), channels \(channelLabel, privacy: .public) @ \(format.sampleRate) Hz")
     }
 
@@ -198,10 +228,20 @@ final class AudioCapture: @unchecked Sendable {
         let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)!
         let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.matchSampleRate, channels: 1, interleaved: false)!
         let converter = format.sampleRate == Self.matchSampleRate ? nil : AVAudioConverter(from: mono, to: target)
+        var streamPacketizer: Packetizer?
+        if let frames = config.streamFrames, streamSink != nil {
+            streamPacketizer = Packetizer(framesPerPacket: frames, sampleRate: format.sampleRate)
+        }
+        let streamSink = streamSink
         try tap.start { [weak self] buffer in
+            if let streamPacketizer, let streamSink, let data = buffer.floatChannelData {
+                let right = buffer.format.channelCount > 1 ? data[1] : data[0]
+                if streamPacketizer.append(left: data[0], right: right, frames: Int(buffer.frameLength)) > 0 { streamSink.packetsReady() }
+            }
             self?.process(buffer, channels: channels, mono: mono, target: target, converter: converter)
         }
         systemTap = tap
+        if let streamPacketizer { streamSink?.attach(streamPacketizer, source: SystemAudioTap.name) }
         activeDeviceName = SystemAudioTap.name
         ring.clear()
         log.notice("Capturing system audio, \(channels.count) ch @ \(format.sampleRate) Hz")
@@ -231,12 +271,33 @@ final class AudioCapture: @unchecked Sendable {
     }
 
     func stop() {
+        streamSink?.attach(nil, source: nil)
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
         systemTap = nil
+        inputTap = nil
+    }
+
+    /// Asks for a small I/O buffer on the device. Core Audio gives every app on the device the smallest any of them
+    /// asks for, and drops ThUNER's request when it stops using the device.
+    /// Returns the size it got.
+    @discardableResult
+    static func setIOBufferFrames(_ frames: Int, device: AudioDeviceID) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyBufferFrameSize,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value = UInt32(frames)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectSetPropertyData(device, &address, 0, nil, size, &value)
+        if status != noErr {
+            Logger(subsystem: "com.idallas.thuner", category: "capture").error("Couldn't set the I/O buffer to \(frames) frames (OSStatus \(status))")
+        }
+        AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value)
+        return Int(value)
     }
 
     /// Stop watching for app changes (when System Audio isn't the input any more).

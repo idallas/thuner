@@ -65,7 +65,39 @@ final class AppModel {
     /// tour asks for each one at the step that needs it.
     var onboardingComplete: Bool { didSet { save(onboardingComplete, "onboardingComplete") } }
     /// Other ThUNERs found on the network, by host name.
-    private(set) var otherThuners: [String] = []
+    private(set) var otherThuners: [String] = [] {
+        didSet { if streamReceiver == nil, !streamSource.isEmpty { applyStreamReceiver() } }
+    }
+
+    // MARK: Streaming (sharing this Mac's input with another ThUNER, or listening to one)
+
+    /// Send this Mac's input to any ThUNER that asks for it.
+    var streamSharing: Bool {
+        didSet {
+            save(streamSharing, "streamSharing")
+            streamSender.sharing = streamSharing
+            restartCapture()
+        }
+    }
+    /// The ThUNER to listen to, by host name; `AppModel.streamThisMac` for this Mac's own input (a test); empty
+    /// for off.
+    var streamSource: String { didSet { save(streamSource, "streamSource"); applyStreamReceiver() } }
+    var streamMethod: StreamMethod { didSet { save(streamMethod.rawValue, "streamMethod"); applyStreamReceiver() } }
+    /// Extra buffer: for raw, the margin beyond one output buffer; for resilient, the least it keeps.
+    var streamMarginMs: Double { didSet { save(streamMarginMs, "streamMarginMs"); applyStreamReceiver() } }
+    /// Nil for the system's default output.
+    var streamOutputUID: String? { didSet { save(streamOutputUID, "streamOutputUID"); applyStreamReceiver() } }
+    static let streamThisMac = "This Mac"
+    /// Who's listening to this Mac.
+    private(set) var streamListeners: [String] = []
+    /// While listening: the playout's numbers, what the other Mac says it's sending, and any problem.
+    private(set) var streamStats: PlayoutStats?
+    private(set) var streamSenderStatus: StreamWire.Status?
+    private(set) var streamProblem: String?
+    private(set) var outputDevices: [AudioInputDevice] = []
+    @ObservationIgnored private let streamSender = AudioStreamSender()
+    @ObservationIgnored private var streamReceiver: AudioStreamReceiver?
+    @ObservationIgnored private var lastStreamLog = Date.distantPast
     /// Microphone permission granted (refreshed after asking).
     private(set) var micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @ObservationIgnored private var networkStarted = false
@@ -543,6 +575,11 @@ final class AppModel {
                 try? FileManager.default.moveItem(at: Self.historyURL, to: aside)
             }
         }
+        streamSharing = d.bool(forKey: "streamSharing")
+        streamSource = d.string(forKey: "streamSource") ?? ""
+        streamMethod = StreamMethod(rawValue: d.string(forKey: "streamMethod") ?? "") ?? .resilient
+        streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
+        streamOutputUID = d.string(forKey: "streamOutputUID")
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
         gate = LevelGate(thresholdDB: threshold)
@@ -577,6 +614,20 @@ final class AppModel {
         peers.onPeersChanged = { [weak self] hosts in
             MainActor.assumeIsolated { self?.otherThuners = hosts }
         }
+
+        capture.streamSink = streamSender
+        streamSender.sharing = streamSharing
+        streamSender.isKnownPeer = { [weak self] address in
+            MainActor.assumeIsolated { self?.peers.isKnownPeer(address) ?? false }
+        }
+        streamSender.onListenersChanged = { [weak self] hosts in
+            MainActor.assumeIsolated {
+                guard let self, hosts != self.streamListeners else { return }
+                for host in Set(hosts).subtracting(self.streamListeners) { self.note("\(host) is listening to this Mac") }
+                self.streamListeners = hosts
+            }
+        }
+        outputDevices = AudioDevices.outputDevices()
 
         players.onChange = { [weak self] _ in self?.playerChanged() }
         players.start()
@@ -618,6 +669,8 @@ final class AppModel {
         connectAPI()
         if twistCommandoEnabled { appLink.start() }
         peers.start()
+        streamSender.start()
+        applyStreamReceiver()
         tuneshineBrowser.start()
         if webDisplayEnabled { startWebDisplay() }
         Task {
@@ -709,7 +762,8 @@ final class AppModel {
         recentRestarts.append(now)
         let config = AudioCapture.Config(deviceUID: inputDeviceUID, firstChannel: firstChannel, channelCount: 2,
                                          systemAudioMode: systemAudioMode,
-                                         systemAudioApps: Set(systemAudioApps.map(\.bundleID)))
+                                         systemAudioApps: Set(systemAudioApps.map(\.bundleID)),
+                                         streamFrames: streamSharing ? 128 : nil)
         do {
             try capture.start(config)
             captureError = nil
@@ -726,6 +780,46 @@ final class AppModel {
         }
         gate.reset()
         perform(machine.audioStopped(at: Date()))
+    }
+
+    // MARK: Streaming
+
+    /// Starts (or restarts, with the current settings) listening to `streamSource`, or stops.
+    private func applyStreamReceiver() {
+        streamReceiver?.stop()
+        streamReceiver = nil
+        streamStats = nil
+        streamSenderStatus = nil
+        streamProblem = nil
+        guard networkStarted, !streamSource.isEmpty else { return }
+        let address: sockaddr_in
+        if streamSource == Self.streamThisMac {
+            address = UDP.loopback
+        } else if let ip = peers.address(ofHost: streamSource) {
+            address = UDP.address(ip, port: StreamWire.port)
+        } else {
+            // Not found yet; `otherThuners` changing tries again.
+            streamProblem = "Looking for \(streamSource)…"
+            return
+        }
+        let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID)
+        let receiver = AudioStreamReceiver(source: address, host: streamSource, settings: settings)
+        receiver.onChange = { [weak self, weak receiver] in
+            MainActor.assumeIsolated {
+                guard let self, let receiver, receiver === self.streamReceiver else { return }
+                self.streamSenderStatus = receiver.status
+                self.streamProblem = receiver.error
+                    ?? (receiver.status?.sharing == false ? "\(receiver.status?.host ?? self.streamSource) isn't sharing its input" : nil)
+            }
+        }
+        streamReceiver = receiver
+        receiver.start()
+        streamProblem = receiver.error
+        note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
+    }
+
+    func refreshOutputDevices() {
+        outputDevices = AudioDevices.outputDevices()
     }
 
     private func devicesChanged() {
@@ -779,6 +873,14 @@ final class AppModel {
         }
         checkAutoPause(at: now)
         noteRecentAudioApps(at: now)
+        if let receiver = streamReceiver {
+            let stats = receiver.stats
+            if stats != streamStats { streamStats = stats }
+            if let stats, now.timeIntervalSince(lastStreamLog) >= 10 {
+                lastStreamLog = now
+                logger.notice("Stream \(stats.method.rawValue, privacy: .public): \(stats.playing ? "playing" : "waiting", privacy: .public), buffer \(String(format: "%.2f", stats.bufferedMs), privacy: .public)/\(String(format: "%.2f", stats.targetMs), privacy: .public) ms, jitter \(String(format: "%.2f", stats.jitterMs), privacy: .public) ms, drift \(String(format: "%+.1f", stats.driftPPM), privacy: .public) ppm, \(stats.received) received, \(stats.lost) lost, \(stats.late) late, \(stats.underruns) dropouts, \(stats.adjustments) corrections")
+            }
+        }
         updateCapture()
         updater.installPendingUpdateIfQuiet(isQuiet: activePlayer == nil && machine.state == .idle)
         if showFloatingCover, floatingCoverOnlyWhilePlaying, (floatingCover?.isVisible ?? false) != musicIsPlaying {

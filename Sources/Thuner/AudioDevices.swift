@@ -37,6 +37,44 @@ enum AudioDevices {
         }
     }
 
+    /// Devices that can play sound, for the stream's output.
+    static func outputDevices() -> [AudioInputDevice] {
+        allDeviceIDs().compactMap { id in
+            let channels = channelCount(id, scope: kAudioDevicePropertyScopeOutput)
+            guard channels > 0, let uid = stringProperty(id, kAudioDevicePropertyDeviceUID),
+                  let name = stringProperty(id, kAudioObjectPropertyName) else { return nil }
+            if name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("com.idallas.thuner.tap.") { return nil }
+            return AudioInputDevice(id: id, uid: uid, name: name, inputChannels: channels)
+        }
+    }
+
+    static func defaultOutputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id) == noErr, id != 0 else { return nil }
+        return id
+    }
+
+    static func outputDevice(uid: String) -> AudioInputDevice? {
+        outputDevices().first { $0.uid == uid }
+    }
+
+    private static func allDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
     static func device(uid: String) -> AudioInputDevice? {
         hardwareInputDevices().first { $0.uid == uid }
     }
@@ -168,9 +206,13 @@ enum AudioDevices {
     }
 
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
+        channelCount(id, scope: kAudioDevicePropertyScopeInput)
+    }
+
+    private static func channelCount(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr, size > 0 else { return 0 }

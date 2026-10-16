@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ThunerCore
 
-/// Settings: General (this Mac's role, login, permission status), Listening, Display, Scrobbling, Updates.
+/// Settings: General (this Mac's role, login, permission status), Listening, Streaming, Display, Scrobbling, Updates.
 struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var apiKey = ""
@@ -12,7 +12,7 @@ struct SettingsView: View {
 
     /// The settings window is an NSTabViewController with toolbar tabs (AppWindows); each tab shows one pane.
     enum Pane: String, CaseIterable {
-        case general, listening, display, scrobbling, updates
+        case general, listening, streaming, display, scrobbling, updates
 
         var title: String { rawValue.capitalized }
 
@@ -20,6 +20,7 @@ struct SettingsView: View {
             switch self {
             case .general: "gearshape"
             case .listening: "waveform"
+            case .streaming: "dot.radiowaves.left.and.right"
             case .display: "rectangle.on.rectangle"
             case .scrobbling: "music.note.list"
             case .updates: "arrow.down.circle"
@@ -305,6 +306,9 @@ struct SettingsView: View {
                     }
                 }
                 .formStyle(.grouped)
+
+            case .streaming:
+                StreamingSettings(model: model)
 
             case .updates:
                 Form {
@@ -604,5 +608,97 @@ extension SettingsView {
             let app = AudioDevices.AudioApp(bundleID: id, name: name)
             if !model.systemAudioApps.contains(app) { model.systemAudioApps.append(app) }
         }
+    }
+}
+
+/// Streaming: share this Mac's input, or listen to another ThUNER's, with a choice of playout method.
+private struct StreamingSettings: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Share this Mac's input with other ThUNERs", isOn: $model.streamSharing)
+                if model.streamSharing {
+                    LabeledContent("Listening now", value: model.streamListeners.isEmpty ? "Nobody" : model.streamListeners.joined(separator: ", "))
+                }
+            } header: {
+                Text("Share")
+            } footer: {
+                Text("Sends the input ThUNER is listening to (\(model.selectedDevice?.name ?? "the default input")) as uncompressed audio, only to ThUNERs on your network that ask for it. Stops while listening is paused.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Picker("Listen to", selection: $model.streamSource) {
+                    Text("Off").tag("")
+                    ForEach(model.otherThuners, id: \.self) { Text($0).tag($0) }
+                    if !model.streamSource.isEmpty, model.streamSource != AppModel.streamThisMac,
+                       !model.otherThuners.contains(model.streamSource) {
+                        Text("\(model.streamSource) (not found)").tag(model.streamSource)
+                    }
+                    Divider()
+                    Text("This Mac (test)").tag(AppModel.streamThisMac)
+                }
+                Picker("Method", selection: $model.streamMethod) {
+                    ForEach(StreamMethod.allCases, id: \.self) { Text($0.name).tag($0) }
+                }
+                Picker(model.streamMethod == .raw ? "Safety margin" : "Minimum buffer", selection: $model.streamMarginMs) {
+                    ForEach([0.5, 1, 2, 3, 5, 10, 20], id: \.self) { ms in
+                        Text(ms < 1 ? "0.5 ms" : "\(Int(ms)) ms").tag(ms)
+                    }
+                }
+                Picker("Output", selection: $model.streamOutputUID) {
+                    Text("System default").tag(String?.none)
+                    ForEach(model.outputDevices) { Text($0.name).tag(Optional($0.uid)) }
+                }
+            } header: {
+                Text("Listen")
+            } footer: {
+                Text(methodHelp).font(.caption).foregroundStyle(.secondary)
+            }
+
+            if !model.streamSource.isEmpty {
+                Section("Stream") {
+                    if let problem = model.streamProblem {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    if let status = model.streamSenderStatus, status.sharing {
+                        LabeledContent("Source", value: "\(status.source ?? "?") on \(status.host)")
+                    }
+                    if let stats = model.streamStats {
+                        LabeledContent("State", value: stats.playing ? "Playing" : "Waiting for audio")
+                        LabeledContent("Format", value: "\(Self.rate(stats.sampleRate)), 24-bit stereo")
+                        LabeledContent("Buffer", value: String(format: "%.1f ms (aiming for %.1f)", stats.bufferedMs, stats.targetMs))
+                        if stats.method == .resilient {
+                            LabeledContent("Network jitter", value: String(format: "%.1f ms", stats.jitterMs))
+                        }
+                        LabeledContent("Clock difference", value: String(format: "%+.0f ppm", stats.driftPPM))
+                        LabeledContent("Packets", value: "\(stats.received) received, \(stats.lost) lost, \(stats.late) late")
+                        LabeledContent("Dropouts", value: "\(stats.underruns)")
+                        if stats.method == .raw {
+                            LabeledContent("Clock corrections", value: "\(stats.adjustments)")
+                        }
+                    } else if model.streamProblem == nil {
+                        Text("Waiting for audio…").foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { model.refreshOutputDevices() }
+    }
+
+    private var methodHelp: String {
+        switch model.streamMethod {
+        case .raw:
+            "Raw plays packets as they arrive, with just the safety margin on top of the output buffer. Lowest latency, but every late or lost packet is a dropout: use it when both Macs are on Ethernet."
+        case .resilient:
+            "Resilient puts packets back in order, grows the buffer to cover the network's measured jitter (and shrinks it again when things calm down), follows the other Mac's clock smoothly, and fades over lost audio. A few ms on Ethernet, more on Wi-Fi."
+        }
+    }
+
+    private static func rate(_ hz: Double) -> String {
+        hz.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(hz / 1000)) kHz" : String(format: "%.1f kHz", hz / 1000)
     }
 }

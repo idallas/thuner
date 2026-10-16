@@ -184,8 +184,14 @@ final class PeerLink: NSObject, @unchecked Sendable {
 }
 
 extension PeerLink {
-    private func isKnownPeer(_ address: in_addr) -> Bool {
+    func isKnownPeer(_ address: in_addr) -> Bool {
         peers.values.contains { $0.contains { $0.sin_addr.s_addr == address.s_addr } }
+    }
+
+    /// The IPv4 address of the ThUNER on `host` (a name as passed to `onPeersChanged`), if it's been found.
+    func address(ofHost host: String) -> in_addr? {
+        guard let name = peerHosts.first(where: { $0.value == host })?.key else { return nil }
+        return peers[name]?.first?.sin_addr
     }
 
     private static func string(_ address: in_addr) -> String {

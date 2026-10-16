@@ -48,14 +48,20 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
    - Deduplicate across sources: an API-reported play beats a Shazam match of the same song coming through the speakers.
    - Duplicate scrobbles (built): before scrobbling, skip if `PlayHistory` says ThUNER already scrobbled the same play (survives relaunches), or if `user.getRecentTracks` shows the same song within `PlayHistory.samePlayWindow` of the start time (Silicio, Spotify's own scrobbling, another Mac). Can't stop another scrobbler that sends *after* ThUNER.
    - History (built): `PlayHistory` in `~/Library/Application Support/Thuner/history.json`, one entry per play from any source with its scrobble status. History window exports a text list or CSV with Apple Music / Spotify links. Creating playlists directly in Apple Music or Spotify isn't built yet.
-2. **Catalog mode** (for old DJ vinyl): play a record, log matches with confidence scores, review them, then push to a playlist.
+2. **Audio streaming** (built, proof of concept; replaces SonoBus): one ThUNER shares its input, another plays it, for same-room listening, so latency matters.
+   - Wire (`ThunerCore/Streaming`): UDP port 47476, 24-bit stereo, 128-frame packets stamped with the input device's own sample time (`Packetizer`), plus JSON subscribe/status messages. The sender only sends to ThUNERs that subscribe each second and that PeerLink found over Bonjour (or loopback).
+   - Two playout methods, chosen on the listening Mac (Settings → Streaming): `RawPlayout` (a FIFO, with drift fixed by dropping/repeating a frame over a 16-sample crossfade; for Ethernet) and `ResilientPlayout` (SonoBus-style: packets placed by timestamp, buffer sized from measured jitter, Hermite resampling steered by the buffer level). Both measure fill against a continuous estimate of the sender's position, not the raw fill, which jumps by a packet whenever arrivals slide past output requests. Simulated drift/jitter/loss tests in `StreamingTests`.
+   - Sender (`DeviceInputTap`): a Core Audio IOProc on the input device at a 128-frame I/O buffer. AVAudioEngine nodes get 512-frame batches whatever the device runs at, so the engine can't be used for this. Receiver (`AudioStreamReceiver`): network thread → `SPSCRing` → `AVAudioSourceNode` render thread. Use `mach_absolute_time()` in the render callback, not the timestamp's host time (that's the future presentation time).
+   - Settings: `streamSharing`, `streamSource` (host name, or "This Mac" for a loopback test), `streamMethod` (raw/resilient), `streamMarginMs`, `streamOutputUID`. Stats are logged every 10 seconds while listening.
+   - Not yet: sharing while listening is paused, low-latency System Audio sharing, resend requests for lost packets, compression, an end-to-end latency measurement.
+3. **Catalog mode** (for old DJ vinyl): play a record, log matches with confidence scores, review them, then push to a playlist.
    - Playlist destinations: Spotify and Apple Music are easy. YouTube's API has a daily quota, and search is expensive against it.
    - Fallbacks when Shazam fails:
      - A second fingerprinting service: ACRCloud (paid) or AcoustID/MusicBrainz (free).
      - A label photo, read with Apple Vision text recognition, to get the catalog number or matrix number, then a Discogs API lookup.
    - Existing apps to compare against first: GrailVinyl and Record Scanner.
    - Possible sub-name: "Runout."
-3. **Pro DJ Link overlay** for OBS (Pioneer CDJs):
+4. **Pro DJ Link overlay** for OBS (Pioneer CDJs):
    - Build on Beat Link (Java) or prolink-connect (JS).
    - Use the DJM mixer's on-air data to decide what's actually audible, and require a track to stay on air for a while before the overlay changes.
    - Serve the overlay as a local web page loaded as an OBS Browser Source.
