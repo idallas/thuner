@@ -58,8 +58,13 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
     private let kp = 2e-5
     private let ki = 2e-6
 
-    public init(minimumFrames: Int) {
+    /// The output's sample rate, when it differs from the stream's (0: the same). The read rate is then this ratio,
+    /// steered as usual.
+    public let outputRate: Double
+
+    public init(minimumFrames: Int, outputRate: Double = 0) {
         self.minimumFrames = max(minimumFrames, 0)
+        self.outputRate = outputRate
         buffer = .allocate(capacity: capacity * 2)
         buffer.initialize(repeating: 0, count: capacity * 2)
         stamps = .allocate(capacity: capacity)
@@ -154,8 +159,9 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
 
     public func render(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int, now: Double) {
         defer { published.publish(local) }
-        renderFrames = frames
-        framesSincePacket += frames
+        let nominal = outputRate > 0 ? sampleRate / outputRate : 1
+        renderFrames = Int((Double(frames) * nominal).rounded(.up))
+        framesSincePacket += renderFrames
         guard streamID != nil, newestEnd > 0, Double(framesSincePacket) < sampleRate * 0.25 else {
             // Nothing coming in: stop, and line up afresh when audio returns.
             readPosition = nil
@@ -194,7 +200,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
         }
 
         let error = fillAverage - target
-        let dt = Double(frames) / sampleRate
+        let dt = Double(renderFrames) / sampleRate
         // Integrate only near the target: while the buffer is still moving to a new target, the error says nothing
         // about the clocks, and integrating it would wind up and overshoot.
         if abs(error) < 48 { integral = max(-0.001 / ki, min(integral + error * dt, 0.001 / ki)) }
@@ -230,7 +236,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
             wasMissing = !present
             left[i] = gain * hermite(l0, l1, l2, l3, t)
             right[i] = gain * hermite(r0, r1, r2, r3, t)
-            position += ratio
+            position += ratio * nominal
         }
         readPosition = position
         local.playing = true

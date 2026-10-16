@@ -154,7 +154,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
 }
 
 /// Listening to another ThUNER's stream: subscribes once a second, takes packets in on a network thread, and plays
-/// them through an output device with one of the playout methods.
+/// them into a pair of an output device's channels with one of the playout methods.
 final class AudioStreamReceiver: @unchecked Sendable {
     struct Settings: Equatable {
         var method: StreamMethod
@@ -162,6 +162,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
         var marginMs: Double
         /// Nil for the system's default output.
         var outputUID: String?
+        /// Zero-based first channel of the output pair.
+        var outputChannel = 0
         var ioBufferFrames = 128
     }
 
@@ -177,12 +179,10 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private var fd: Int32 = -1
     private var source: DispatchSourceRead?
     private var subscribeTimer: Timer?
-    private var configObserver: NSObjectProtocol?
     private let packets = SPSCRing(slotSize: 8 + StreamWire.maxDatagram, capacity: 512)
     /// Created at the first packet (it needs the sample rate); then only touched on the render thread.
     private var playout: Playout?
-    private var engine: AVAudioEngine?
-    /// The rate the output engine was built for, read on the network thread to spot a change.
+    /// The stream rate the output was started for, read on the network thread to spot a change.
     private let engineRate = Atomic<UInt32>(0)
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     private let network = DispatchQueue(label: "com.idallas.thuner.stream-receive", qos: .userInteractive)
@@ -221,7 +221,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
         if fd >= 0 { UDP.send(fd, StreamWire.control(.unsubscribe, StreamWire.Subscribe(host: host, method: settings.method)), to: sourceAddress) }
         source?.cancel()  // closes the socket once no handler is running
         source = nil
-        stopEngine()
+        stopOutput()
         fd = -1
     }
 
@@ -251,7 +251,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
                     if header.sampleRate != engineRate.load(ordering: .relaxed) {
                         engineRate.store(header.sampleRate, ordering: .relaxed)
                         let rate = Double(header.sampleRate)
-                        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.startEngine(sampleRate: rate) } }
+                        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.startOutput(sampleRate: rate) } }
                     }
                     packets.push { slot in
                         slot.storeBytes(of: arrival, as: Double.self)
@@ -274,107 +274,103 @@ final class AudioStreamReceiver: @unchecked Sendable {
 
     // MARK: Output
 
-    @MainActor private func startEngine(sampleRate: Double) {
-        stopEngine()
+    /// (Re)starts playback into the chosen output for a stream at `sampleRate`.
+    @MainActor private func startOutput(sampleRate: Double) {
+        stopOutput()
         guard fd >= 0 else { return }
+        streamRate = sampleRate
+        let deviceID: AudioDeviceID?
+        if let uid = settings.outputUID {
+            deviceID = AudioDevices.outputDevice(uid: uid)?.id
+            if deviceID == nil { error = "The output isn't connected" }
+        } else {
+            deviceID = AudioDevices.defaultOutputDevice()
+        }
+        guard let deviceID, let outputRate = AudioDevices.nominalSampleRate(deviceID) else {
+            if error == nil { error = "No output device" }
+            onChange?()
+            return
+        }
+
         let marginFrames = Int(settings.marginMs / 1000 * sampleRate)
+        let rate = outputRate == sampleRate ? 0 : outputRate
         let playout: Playout = switch settings.method {
-        case .raw: RawPlayout(targetFrames: marginFrames)
-        case .resilient: ResilientPlayout(minimumFrames: marginFrames)
+        case .raw: RawPlayout(targetFrames: marginFrames, outputRate: rate)
+        case .resilient: ResilientPlayout(minimumFrames: marginFrames, outputRate: rate)
         }
-        self.playout = playout
-
-        let engine = AVAudioEngine()
-        let output = engine.outputNode
-        var outputDevice = AudioDevices.defaultOutputDevice()
-        if let uid = settings.outputUID, let device = AudioDevices.outputDevice(uid: uid), let unit = output.audioUnit {
-            var id = device.id
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                              &id, UInt32(MemoryLayout<AudioDeviceID>.size))
-            if status == noErr {
-                outputDevice = device.id
-            } else {
-                log.error("Couldn't select output \(device.name, privacy: .public) (OSStatus \(status))")
-            }
-        }
-
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
-        let scratch = UnsafeMutablePointer<Float>.allocate(capacity: StreamWire.maxFramesPerPacket * StreamWire.channels)
+        let scratch = Scratch()
         let packets = self.packets
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, list in
-            // Not the timestamp's host time: for an output that's when this buffer will be heard, a few ms ahead,
-            // and the playout needs now on the same clock as the arrival times.
-            let now = HostClock.now()
-            while packets.pop({ slot in
-                let arrival = slot.loadUnaligned(as: Double.self)
-                let bytes = UnsafeRawBufferPointer(rebasing: slot[8...])
-                guard let header = StreamWire.audioHeader(bytes) else { return }
-                StreamWire.readSamples(bytes, header: header, into: scratch)
-                playout.receive(header, samples: scratch, arrival: arrival)
-            }) {}
-            let buffers = UnsafeMutableAudioBufferListPointer(list)
-            guard buffers.count >= 2, let l = buffers[0].mData, let r = buffers[1].mData else { return noErr }
-            playout.render(left: l.assumingMemoryBound(to: Float.self), right: r.assumingMemoryBound(to: Float.self),
-                           frames: Int(frameCount), now: now)
-            return noErr
-        }
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.configurationChanged(engine, sampleRate: sampleRate) }
-        }
         do {
-            engine.prepare()
-            try engine.start()
-            self.engine = engine
+            let tap = try DeviceOutputTap(device: deviceID, firstChannel: settings.outputChannel,
+                                          ioBufferFrames: settings.ioBufferFrames) { left, right, frames in
+                let now = HostClock.now()
+                while packets.pop({ slot in
+                    let arrival = slot.loadUnaligned(as: Double.self)
+                    let bytes = UnsafeRawBufferPointer(rebasing: slot[8...])
+                    guard let header = StreamWire.audioHeader(bytes) else { return }
+                    StreamWire.readSamples(bytes, header: header, into: scratch.samples)
+                    playout.receive(header, samples: scratch.samples, arrival: arrival)
+                }) {}
+                playout.render(left: left, right: right, frames: frames, now: now)
+            }
+            try tap.start()
+            output = tap
+            self.playout = playout
             error = nil
-            // Only after starting: the engine sets its own I/O buffer size as it starts.
-            let ioFrames = outputDevice.map { AudioCapture.setIOBufferFrames(settings.ioBufferFrames, device: $0) } ?? 0
-            log.notice("Stream output started @ \(sampleRate) Hz, \(self.settings.method.rawValue, privacy: .public), margin \(self.settings.marginMs) ms, I/O buffer \(ioFrames) frames")
+            watch(deviceID)
+            log.notice("Stream output started: \(sampleRate) Hz stream to \(outputRate) Hz output, channel \(self.settings.outputChannel + 1), \(self.settings.method.rawValue, privacy: .public), margin \(self.settings.marginMs) ms, I/O buffer \(tap.ioBufferFrames) frames")
         } catch {
             self.error = "Couldn't start the output: \(error.localizedDescription)"
             log.error("Couldn't start the stream output: \(error.localizedDescription, privacy: .public)")
         }
-        // The node's block owns the scratch buffer for as long as the engine lives.
-        scratchBuffers.append(scratch)
         onChange?()
     }
 
-    private var scratchBuffers: [UnsafeMutablePointer<Float>] = []
-    private var recentRebuilds: [Date] = []
-
-    /// Starting the engine (and asking for a small I/O buffer) posts a configuration change of its own, and
-    /// rebuilding would just post another; so resume this engine, and only rebuild if it won't start (the output
-    /// device went away), at most a few times a minute.
-    @MainActor private func configurationChanged(_ engine: AVAudioEngine, sampleRate: Double) {
-        guard engine === self.engine, !engine.isRunning else { return }
-        do {
-            try engine.start()
-            log.notice("Stream output configuration changed; resumed")
-        } catch {
-            recentRebuilds = recentRebuilds.filter { Date().timeIntervalSince($0) < 60 }
-            guard recentRebuilds.count < 5 else {
-                self.error = "The output keeps failing: \(error.localizedDescription)"
-                onChange?()
-                return
+    /// Restarts the output when it changes under us: its sample rate, it going away, or (when following the
+    /// system's choice) a different default output.
+    @MainActor private func watch(_ device: AudioDeviceID) {
+        let restart: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                guard let self, self.output != nil else { return }
+                self.recentRestarts = self.recentRestarts.filter { Date().timeIntervalSince($0) < 60 }
+                guard self.recentRestarts.count < 10 else { return }
+                self.recentRestarts.append(Date())
+                self.log.notice("Stream output changed; restarting")
+                self.startOutput(sampleRate: self.streamRate)
             }
-            recentRebuilds.append(Date())
-            log.notice("Stream output stopped (\(error.localizedDescription, privacy: .public)); rebuilding")
-            startEngine(sampleRate: sampleRate)
+        }
+        var watched = [
+            (device, kAudioDevicePropertyNominalSampleRate),
+            (device, kAudioDevicePropertyDeviceIsAlive),
+        ]
+        if settings.outputUID == nil { watched.append((AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice)) }
+        for (object, selector) in watched {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            if AudioObjectAddPropertyListenerBlock(object, &address, .main, restart) == noErr {
+                listeners.append((object, address, restart))
+            }
         }
     }
 
-    @MainActor private func stopEngine() {
-        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
-        configObserver = nil
-        engine?.stop()
-        engine = nil
+    @MainActor private func stopOutput() {
+        for (object, address, block) in listeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(object, &address, .main, block)
+        }
+        listeners.removeAll()
+        output = nil
     }
 
-    deinit {
-        for buffer in scratchBuffers { buffer.deallocate() }
+    private var output: DeviceOutputTap?
+    private var streamRate = 48_000.0
+    private var recentRestarts: [Date] = []
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+
+    /// Decoding space for the render thread, freed with the last output that uses it.
+    private final class Scratch: @unchecked Sendable {
+        let samples = UnsafeMutablePointer<Float>.allocate(capacity: StreamWire.maxFramesPerPacket * StreamWire.channels)
+        deinit { samples.deallocate() }
     }
 }
 

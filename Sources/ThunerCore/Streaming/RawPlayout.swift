@@ -1,7 +1,8 @@
 /// The simple method: packets go into a FIFO in arrival order and play out once one output buffer plus
 /// `targetFrames` of safety margin has built up. The two clocks drift apart by a few frames a second, so the FIFO's
 /// average fill is watched, and when it strays more than a few frames from that, one frame is dropped or repeated,
-/// spread over 16 samples so there's no click.
+/// spread over 16 samples so there's no click. If the output runs at a different rate, it's read at that fixed ratio
+/// (with linear interpolation); otherwise samples come out exactly as sent.
 public final class RawPlayout: Playout, @unchecked Sendable {
     public let method = StreamMethod.raw
     /// Extra frames kept beyond one output buffer.
@@ -29,12 +30,24 @@ public final class RawPlayout: Playout, @unchecked Sendable {
     private var rampStep = 1.0
     private var netAdjustment = 0
     private var framesPlayed = 0
+    /// Far too much buffered (the output's buffer shrank, or a burst arrived): jump ahead by `skipOffset` frames,
+    /// crossfading from the old position to the new one over `skipLength` samples.
+    private let skipThreshold = 64.0
+    private let skipLength = 32
+    private var skipRemaining = 0
+    private var skipOffset = 0
 
     private var local = PlayoutStats()
     private let published = StatsBox()
 
-    public init(targetFrames: Int) {
+    /// The output's sample rate, when it differs from the stream's (0: the same).
+    public let outputRate: Double
+    /// Stream frames per output frame.
+    private var step = 1.0
+
+    public init(targetFrames: Int, outputRate: Double = 0) {
         self.targetFrames = max(targetFrames, 0)
+        self.outputRate = outputRate
         buffer = .allocate(capacity: capacity * 2)
         buffer.initialize(repeating: 0, count: capacity * 2)
         local.method = .raw
@@ -91,6 +104,7 @@ public final class RawPlayout: Playout, @unchecked Sendable {
     private func startOver() {
         priming = true
         rampRemaining = 0
+        skipRemaining = 0
     }
 
     /// The fill as if each packet trickled in over its own length instead of landing all at once. The real fill
@@ -103,7 +117,8 @@ public final class RawPlayout: Playout, @unchecked Sendable {
 
     public func render(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int, now: Double) {
         defer { published.publish(local) }
-        let center = Double(frames + targetFrames)
+        step = outputRate > 0 ? sampleRate / outputRate : 1
+        let center = Double(frames) * step + Double(targetFrames)
         var fill = Double(written) - readPosition
         if priming {
             let smooth = smoothFill(fill, now: now)
@@ -119,9 +134,9 @@ public final class RawPlayout: Playout, @unchecked Sendable {
             fillAverage = center
         }
         // One frame past the last one read, for interpolating mid-adjustment.
-        guard fill >= Double(frames) + 1 + (rampRemaining > 0 ? 1 : 0) else {
+        guard fill >= Double(frames) * step + 2 + (rampRemaining > 0 ? 1 : 0) + Double(skipRemaining > 0 ? skipOffset : 0) else {
             // Ran dry: play what's left, fading it out, and wait for the buffer to refill.
-            let available = max(Int(fill) - 1, 0)
+            let available = min(max(Int((fill - 2) / step), 0), frames)
             read(left, right, frames: available)
             let fade = min(available, 32)
             for i in 0..<fade {
@@ -144,36 +159,56 @@ public final class RawPlayout: Playout, @unchecked Sendable {
         for i in 0..<frames {
             let whole = Int(readPosition)
             let t = Float(readPosition - Double(whole))
-            let a = (whole % capacity) * 2
-            if t == 0 {
-                left[i] = buffer[a]
-                right[i] = buffer[a + 1]
-            } else {
-                let b = ((whole + 1) % capacity) * 2
-                left[i] = buffer[a] + (buffer[b] - buffer[a]) * t
-                right[i] = buffer[a + 1] + (buffer[b + 1] - buffer[a + 1]) * t
+            frame(whole, t, &left[i], &right[i])
+            if skipRemaining > 0 {
+                var l: Float = 0, r: Float = 0
+                frame(whole + skipOffset, t, &l, &r)
+                let w = Float(skipLength - skipRemaining + 1) / Float(skipLength + 1)
+                left[i] += (l - left[i]) * w
+                right[i] += (r - right[i]) * w
+                skipRemaining -= 1
+                if skipRemaining == 0 { readPosition += Double(skipOffset) }
             }
             if rampRemaining > 0 {
                 readPosition += rampStep
                 rampRemaining -= 1
                 // 16 steps of 1 ± 1/16 add up to exactly 2 or 0 frames, so we land back on a whole frame.
-                if rampRemaining == 0 { readPosition = readPosition.rounded() }
+                if rampRemaining == 0, step == 1 { readPosition = readPosition.rounded() }
             } else {
-                readPosition += 1
+                readPosition += step
             }
         }
         framesPlayed += frames
     }
 
+    @inline(__always)
+    private func frame(_ whole: Int, _ t: Float, _ l: inout Float, _ r: inout Float) {
+        let a = (whole % capacity) * 2
+        if t == 0 {
+            l = buffer[a]
+            r = buffer[a + 1]
+        } else {
+            let b = ((whole + 1) % capacity) * 2
+            l = buffer[a] + (buffer[b] - buffer[a]) * t
+            r = buffer[a + 1] + (buffer[b + 1] - buffer[a + 1]) * t
+        }
+    }
+
     private func trackDrift(fill: Double, center: Double, frames: Int) {
         fillAverage += (fill - fillAverage) * min(Double(frames) / (0.5 * sampleRate), 1)
         framesSinceCheck += frames
-        if framesSinceCheck >= Int(sampleRate / 4), rampRemaining == 0 {
+        if framesSinceCheck >= Int(sampleRate / 4), rampRemaining == 0, skipRemaining == 0 {
             framesSinceCheck = 0
             let deviation = fillAverage - center
-            if abs(deviation) > tolerance {
+            if deviation > skipThreshold {
+                // Not drift (that's a frame or two a second): catch up in one go rather than a frame at a time.
+                skipOffset = Int(deviation.rounded(.down))
+                skipRemaining = skipLength
+                fillAverage -= Double(skipOffset)
+                local.adjustments += 1
+            } else if abs(deviation) > tolerance {
                 let drop = deviation > 0
-                rampStep = 1 + (drop ? 1.0 : -1.0) / Double(rampLength)
+                rampStep = step + (drop ? 1.0 : -1.0) / Double(rampLength)
                 rampRemaining = rampLength
                 // We know exactly what this does to the fill; don't wait for the average to notice.
                 fillAverage += drop ? -1 : 1

@@ -187,8 +187,8 @@ struct MenuView: View {
                 .disabled(model.micOffReason != nil && model.activePlayer == nil)
                 if let device = model.selectedDevice, device.inputChannels > 2 {
                     Picker("Channels", selection: $model.firstChannel) {
-                        ForEach(Array(stride(from: 0, to: device.inputChannels, by: 2)), id: \.self) { first in
-                            Text(first + 1 < device.inputChannels ? "Ch \(first + 1)–\(first + 2)" : "Ch \(first + 1)").tag(first)
+                        ForEach(device.channelPairs, id: \.first) { pair in
+                            Text(pair.label).tag(pair.first)
                         }
                     }
                     .labelsHidden()

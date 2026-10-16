@@ -652,6 +652,13 @@ private struct StreamingSettings: View {
                     Text("System default").tag(String?.none)
                     ForEach(model.outputDevices) { Text($0.name).tag(Optional($0.uid)) }
                 }
+                if let device = model.selectedStreamOutput, device.inputChannels > 2 {
+                    Picker("Channels", selection: $model.streamOutputChannel) {
+                        ForEach(device.channelPairs, id: \.first) { pair in
+                            Text(pair.label).tag(pair.first)
+                        }
+                    }
+                }
             } header: {
                 Text("Listen")
             } footer: {

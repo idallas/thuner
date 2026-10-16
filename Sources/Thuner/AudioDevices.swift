@@ -7,7 +7,21 @@ struct AudioInputDevice: Identifiable, Hashable {
     /// Stable across reboots and replugging; this is what gets saved in settings.
     let uid: String
     let name: String
+    /// Input channels (for an output device from `outputDevices()`, its output channels).
     let inputChannels: Int
+    /// The driver's names for the channels, where it has them (an Apollo's "VIRTUAL 1"); empty strings otherwise.
+    var channelNames: [String] = []
+
+    /// Choices for a two-channel pair: first channel (zero-based) and a label like "21–22 · VIRTUAL 1 / VIRTUAL 2".
+    var channelPairs: [(first: Int, label: String)] {
+        stride(from: 0, to: inputChannels, by: 2).map { first in
+            let second = first + 1 < inputChannels ? first + 1 : nil
+            let numbers = second.map { "\(first + 1)–\($0 + 1)" } ?? "\(first + 1)"
+            let names = [first, second].compactMap { $0 }.compactMap { $0 < channelNames.count ? channelNames[$0] : nil }
+                .filter { !$0.isEmpty }
+            return (first, names.isEmpty ? "Ch \(numbers)" : "\(numbers) · \(names.joined(separator: " / "))")
+        }
+    }
 }
 
 enum AudioDevices {
@@ -33,7 +47,8 @@ enum AudioDevices {
             // Core Audio's own transient aggregate (it appears while some apps are using audio), and ThUNER's own
             // system-audio device: never inputs anyone means to pick.
             if name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("com.idallas.thuner.tap.") { return nil }
-            return AudioInputDevice(id: id, uid: uid, name: name, inputChannels: channels)
+            return AudioInputDevice(id: id, uid: uid, name: name, inputChannels: channels,
+                                    channelNames: channelNames(id, scope: kAudioDevicePropertyScopeInput, count: channels))
         }
     }
 
@@ -44,7 +59,8 @@ enum AudioDevices {
             guard channels > 0, let uid = stringProperty(id, kAudioDevicePropertyDeviceUID),
                   let name = stringProperty(id, kAudioObjectPropertyName) else { return nil }
             if name.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("com.idallas.thuner.tap.") { return nil }
-            return AudioInputDevice(id: id, uid: uid, name: name, inputChannels: channels)
+            return AudioInputDevice(id: id, uid: uid, name: name, inputChannels: channels,
+                                    channelNames: channelNames(id, scope: kAudioDevicePropertyScopeOutput, count: channels))
         }
     }
 
@@ -73,6 +89,29 @@ enum AudioDevices {
         var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return [] }
         return ids
+    }
+
+    /// The driver's per-channel names (empty where it has none).
+    static func channelNames(_ id: AudioDeviceID, scope: AudioObjectPropertyScope, count: Int) -> [String] {
+        guard count > 2 else { return [] }
+        return (1...count).map { channel in
+            var address = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyElementName, mScope: scope, mElement: UInt32(channel))
+            var value: Unmanaged<CFString>?
+            var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr, let value else { return "" }
+            return value.takeRetainedValue() as String
+        }
+    }
+
+    static func nominalSampleRate(_ id: AudioDeviceID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &rate) == noErr, rate > 0 else { return nil }
+        return rate
     }
 
     static func device(uid: String) -> AudioInputDevice? {

@@ -43,7 +43,7 @@ final class DeviceInputTap {
         sampleRate = rate
 
         // Where each device channel lives: input streams arrive as one buffer each, channels interleaved within.
-        let layout = try Self.inputLayout(device)
+        let layout = try Self.layout(device, scope: kAudioDevicePropertyScopeInput)
         guard layout.allFloat else { throw TapError.unsupportedFormat }
         let total = layout.channelsPerBuffer.reduce(0, +)
         let first = min(max(firstChannel, 0), max(total - 1, 0))
@@ -103,23 +103,24 @@ final class DeviceInputTap {
         right.deallocate()
     }
 
-    private struct Layout {
+    struct Layout {
         var channelsPerBuffer: [Int]
         var allFloat: Bool
     }
 
-    private static func inputLayout(_ device: AudioDeviceID) throws -> Layout {
+    /// How a device's input or output channels are laid out in an IOProc's buffers, and whether they're float.
+    static func layout(_ device: AudioDeviceID, scope: AudioObjectPropertyScope) throws -> Layout {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size)
-        guard status == noErr, size > 0 else { throw TapError.coreAudio("read the input's channels", status) }
+        guard status == noErr, size > 0 else { throw TapError.coreAudio("read the device's channels", status) }
         let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { raw.deallocate() }
         status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw)
-        guard status == noErr else { throw TapError.coreAudio("read the input's channels", status) }
+        guard status == noErr else { throw TapError.coreAudio("read the device's channels", status) }
         let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
         let channels = list.map { Int($0.mNumberChannels) }
 
@@ -145,7 +146,7 @@ final class DeviceInputTap {
     }
 
     /// The buffer and the position within its frames of one of the device's channels.
-    private static func locate(_ channel: Int, in channelsPerBuffer: [Int]) -> (buffer: Int, offset: Int) {
+    static func locate(_ channel: Int, in channelsPerBuffer: [Int]) -> (buffer: Int, offset: Int) {
         var remaining = channel
         for (index, count) in channelsPerBuffer.enumerated() {
             if remaining < count { return (index, remaining) }

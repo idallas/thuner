@@ -75,10 +75,14 @@ import Testing
 /// packets, and an output ticking on the receiver's clock.
 struct StreamSimulation {
     var senderRate = 48_000.0
+    /// The output device's rate (nil: the same as the sender's).
+    var outputRate: Double?
     /// Sender clock error in parts per million (positive: it runs fast).
     var driftPPM = 0.0
     var packetFrames = 128
     var renderFrames = 128
+    /// The output's buffer size changing partway (as it does when a smaller one is asked for after starting).
+    var renderFramesChange: (at: Double, frames: Int)?
     var latency = 0.0005
     /// Extra random delay per packet, up to this many seconds.
     var jitter = 0.0
@@ -98,13 +102,15 @@ struct StreamSimulation {
     func run(_ playout: Playout, seed: UInt64 = 1, keepAudio: Bool = false) -> Result {
         var rng = SplitMix(seed: seed)
         let senderPeriod = Double(packetFrames) / (senderRate * (1 + driftPPM / 1_000_000))
-        let renderPeriod = Double(renderFrames) / senderRate
+        var renderFrames = self.renderFrames
+        var renderPeriod = Double(renderFrames) / (outputRate ?? senderRate)
         var nextSend = 0.0
         var nextRender = 0.0
         var sequence: UInt32 = 0
         var inFlight: [(arrival: Double, header: AudioPacketHeader, samples: [Float])] = []
-        var left = [Float](repeating: 0, count: renderFrames)
-        var right = [Float](repeating: 0, count: renderFrames)
+        let most = max(renderFrames, renderFramesChange?.frames ?? 0)
+        var left = [Float](repeating: 0, count: most)
+        var right = [Float](repeating: 0, count: most)
         var output: [Float] = []
         var input: [Float] = []
         var phase = 0.0
@@ -136,8 +142,12 @@ struct StreamSimulation {
                     first.samples.withUnsafeBufferPointer { playout.receive(first.header, samples: $0.baseAddress!, arrival: first.arrival) }
                     inFlight.removeFirst()
                 }
+                if let change = renderFramesChange, nextRender >= change.at, renderFrames != change.frames {
+                    renderFrames = change.frames
+                    renderPeriod = Double(renderFrames) / (outputRate ?? senderRate)
+                }
                 playout.render(left: &left, right: &right, frames: renderFrames, now: nextRender)
-                if keepAudio { output.append(contentsOf: left) }
+                if keepAudio { output.append(contentsOf: left[0..<renderFrames]) }
                 nextRender += renderPeriod
             }
         }
@@ -189,6 +199,22 @@ struct SplitMix {
         #expect(result.stats.late == 0)
     }
 
+    @Test func catchesUpWhenTheOutputBufferShrinks() {
+        let sim = StreamSimulation(renderFrames: 512, renderFramesChange: (at: 1, frames: 128), seconds: 5)
+        let result = sim.run(RawPlayout(targetFrames: 64))
+        #expect(result.stats.underruns == 0)
+        #expect(abs(result.stats.bufferedFrames - result.stats.targetFrames) < 20, "\(result.stats)")
+    }
+
+    @Test func playsToAnOutputAtAnotherRate() {
+        let result = StreamSimulation(outputRate: 44_100, driftPPM: 30, seconds: 60)
+            .run(RawPlayout(targetFrames: 64, outputRate: 44_100), keepAudio: true)
+        #expect(result.stats.underruns == 0)
+        #expect(abs(result.stats.driftPPM - 30) < 15, "measured \(result.stats.driftPPM) ppm")
+        // 48 kHz worth of tone in, 44.1 kHz out: the output holds 44.1/48 as many samples of it.
+        #expect(abs(Double(result.output.count) / Double(result.input.count) - 44_100.0 / 48_000) < 0.01)
+    }
+
     @Test func dropsPacketsThatArriveOutOfOrder() {
         // Jitter longer than a packet reorders them; a FIFO can only throw the stragglers away.
         let result = StreamSimulation(jitter: 0.006, seconds: 10).run(RawPlayout(targetFrames: 512))
@@ -220,6 +246,15 @@ struct SplitMix {
         #expect(result.stats.underruns == 0)
         #expect(abs(result.stats.driftPPM - ppm) < 10, "measured \(result.stats.driftPPM) ppm")
         #expect(abs(result.stats.bufferedFrames - result.stats.targetFrames) < 20)
+    }
+
+    @Test(arguments: [44_100.0, 96_000.0])
+    func playsToAnOutputAtAnotherRate(rate: Double) {
+        let result = StreamSimulation(outputRate: rate, driftPPM: -40, jitter: 0.001, seconds: 60)
+            .run(ResilientPlayout(minimumFrames: 32, outputRate: rate))
+        #expect(result.stats.underruns == 0)
+        #expect(result.stats.lost == 0)
+        #expect(abs(result.stats.driftPPM + 40) < 10, "measured \(result.stats.driftPPM) ppm")
     }
 
     @Test func growsTheBufferForJitterAndReordering() {

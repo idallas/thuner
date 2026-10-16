@@ -86,7 +86,18 @@ final class AppModel {
     /// Extra buffer: for raw, the margin beyond one output buffer; for resilient, the least it keeps.
     var streamMarginMs: Double { didSet { save(streamMarginMs, "streamMarginMs"); applyStreamReceiver() } }
     /// Nil for the system's default output.
-    var streamOutputUID: String? { didSet { save(streamOutputUID, "streamOutputUID"); applyStreamReceiver() } }
+    var streamOutputUID: String? {
+        didSet {
+            save(streamOutputUID, "streamOutputUID")
+            // A channel pair picked for one interface means nothing on another.
+            if streamOutputChannel != 0, oldValue != streamOutputUID { streamOutputChannel = 0 } else { applyStreamReceiver() }
+        }
+    }
+    /// Zero-based first channel of the output pair, for interfaces with more than two outputs.
+    var streamOutputChannel: Int { didSet { save(streamOutputChannel, "streamOutputChannel"); applyStreamReceiver() } }
+    var selectedStreamOutput: AudioInputDevice? {
+        outputDevices.first { $0.uid == streamOutputUID }
+    }
     static let streamThisMac = "This Mac"
     /// Who's listening to this Mac.
     private(set) var streamListeners: [String] = []
@@ -580,6 +591,7 @@ final class AppModel {
         streamMethod = StreamMethod(rawValue: d.string(forKey: "streamMethod") ?? "") ?? .resilient
         streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
         streamOutputUID = d.string(forKey: "streamOutputUID")
+        streamOutputChannel = d.integer(forKey: "streamOutputChannel")
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
         gate = LevelGate(thresholdDB: threshold)
@@ -802,7 +814,8 @@ final class AppModel {
             streamProblem = "Looking for \(streamSource)…"
             return
         }
-        let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID)
+        let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID,
+                                                    outputChannel: streamOutputUID == nil ? 0 : streamOutputChannel)
         let receiver = AudioStreamReceiver(source: address, host: streamSource, settings: settings)
         receiver.onChange = { [weak self, weak receiver] in
             MainActor.assumeIsolated {
