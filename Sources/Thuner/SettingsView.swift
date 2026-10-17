@@ -614,6 +614,8 @@ extension SettingsView {
 /// Streaming: share this Mac's input, or listen to another ThUNER's, with a choice of playout method.
 private struct StreamingSettings: View {
     @Bindable var model: AppModel
+    @State private var passwordDraft = ""
+    @FocusState private var editingPassword: Bool
 
     var body: some View {
         Form {
@@ -627,6 +629,21 @@ private struct StreamingSettings: View {
                         Text(details).font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     }
                 }
+            }
+
+            Section {
+                // Saved on Return or leaving the field, not per keystroke (each change re-derives the key and
+                // restarts the stream).
+                SecureField("Stream password", text: $passwordDraft, prompt: Text("None"))
+                    .onSubmit { model.streamPassword = passwordDraft }
+                    .focused($editingPassword)
+                    .onChange(of: editingPassword) { _, editing in if !editing { model.streamPassword = passwordDraft } }
+                    .onAppear { passwordDraft = model.streamPassword }
+            } header: {
+                Text("Password")
+            } footer: {
+                Text("Optional. With one set, only Macs with the same password can listen to this one or be listened to, and the audio is encrypted on the network. Set the same on both Macs; on a Mac without a screen, `defaults write com.idallas.thuner streamPassword …` (ThUNER moves it into the Keychain).")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
@@ -680,6 +697,7 @@ private struct StreamingSettings: View {
         }
         .formStyle(.grouped)
         .onAppear { model.refreshOutputDevices() }
+        .onDisappear { model.streamPassword = passwordDraft }
     }
 
     /// Everything else about the stream, in a line or two under the meter.

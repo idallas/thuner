@@ -51,6 +51,8 @@ final class PeerLink: NSObject, @unchecked Sendable {
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []
     private var peers: [String: [sockaddr_in]] = [:]
+    /// Lookups tried so far per service, while it's still around (cleared when it goes).
+    private var resolveAttempts: [String: Int] = [:]
     /// Ids of recently handled messages.
     private var recentMessageIDs: [String] = []
 
@@ -124,9 +126,28 @@ final class PeerLink: NSObject, @unchecked Sendable {
 
     fileprivate func found(_ service: NetService) {
         guard service.name != instance else { return }
-        resolving.append(service)
+        resolveAttempts[service.name] = 0
+        resolve(service)
+    }
+
+    private func resolve(_ service: NetService) {
+        if !resolving.contains(where: { $0 === service }) { resolving.append(service) }
         service.delegate = self
         service.resolve(withTimeout: 10)
+    }
+
+    /// Looking an address up can fail, or come back without an IPv4 one, when both Macs start at once (after a
+    /// power cut, say). Without trying again, the two ignore each other until one restarts.
+    fileprivate func resolveAgain(_ service: NetService) {
+        let attempts = (resolveAttempts[service.name] ?? 0) + 1
+        guard attempts <= 6, peers[service.name] == nil else { return }
+        resolveAttempts[service.name] = attempts
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            // Unless it went away meanwhile.
+            guard let self, self.resolveAttempts[service.name] != nil, self.peers[service.name] == nil else { return }
+            service.stop()
+            self.resolve(service)
+        }
     }
 
     fileprivate func resolved(_ service: NetService) {
@@ -140,7 +161,10 @@ final class PeerLink: NSObject, @unchecked Sendable {
                 return addr
             }
         }
-        guard !addresses.isEmpty else { return }
+        guard !addresses.isEmpty else {
+            resolveAgain(service)
+            return
+        }
         if peers[service.name] == nil {
             log.notice("Found another ThUNER at \(service.hostName ?? "?", privacy: .public)")
         }
@@ -151,6 +175,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
 
     fileprivate func removed(_ service: NetService) {
         resolving.removeAll { $0 === service }
+        resolveAttempts[service.name] = nil
         peers[service.name] = nil
         peerHosts[service.name] = nil
         onPeersChanged?(Array(peerHosts.values).sorted())
@@ -216,5 +241,7 @@ extension PeerLink: NetServiceBrowserDelegate, NetServiceDelegate {
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         resolving.removeAll { $0 === sender }
+        log.notice("Couldn't look up another ThUNER yet (\(errorDict.description, privacy: .public)); trying again")
+        resolveAgain(sender)
     }
 }

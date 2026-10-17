@@ -51,6 +51,19 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         var targets: [sockaddr_in] = []
         /// Packets listeners asked for again, for the sending thread.
         var resends: [(address: sockaddr_in, sequences: [UInt32])] = []
+        var cipher: StreamCipher?
+    }
+
+    /// The stream password's cipher, if one is set: everything to and from listeners is sealed with it, and
+    /// requests that aren't are only told a password is needed. Main thread; changing it drops every listener.
+    var cipher: StreamCipher? {
+        didSet {
+            shared.withLock { $0.cipher = cipher }
+            if !listeners.isEmpty {
+                listeners.removeAll()
+                listenersChanged()
+            }
+        }
     }
     /// What was sent lately, for resending. Only the sending thread touches it.
     private let history = PacketHistory()
@@ -64,6 +77,23 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     private var expiry: Timer?
     private var lastLog = Date.distantPast
     private var lastIgnoredLog = Date.distantPast
+    private var lastPasswordLog = Date.distantPast
+
+    @MainActor private func reply(_ message: Data, to address: sockaddr_in) {
+        if let cipher {
+            message.withUnsafeBytes { if let sealed = cipher.seal($0) { UDP.send(fd, sealed, to: address) } }
+        } else {
+            UDP.send(fd, message, to: address)
+        }
+    }
+
+    @MainActor private func passwordProblem(_ problem: StreamWire.Status.PasswordProblem, to address: sockaddr_in) {
+        if Date().timeIntervalSince(lastPasswordLog) > 10 {
+            lastPasswordLog = Date()
+            log.notice("Stream request from \(UDP.string(address.sin_addr), privacy: .public) without the right password (\(problem.rawValue, privacy: .public))")
+        }
+        UDP.send(fd, StreamWire.control(.status, StreamWire.Status(host: host, sharing: false, password: problem)), to: address)
+    }
 
     /// Another Mac's name, as it gave it: shown and logged, so kept short and printable.
     private static func displayable(_ host: String) -> String {
@@ -109,20 +139,28 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         let fd = self.fd
         while true {
             ready.wait()
-            let (packetizer, targets, idle, resends) = shared.withLock { state in
+            let (packetizer, targets, idle, resends, cipher) = shared.withLock { state in
                 defer { state.resends.removeAll(keepingCapacity: true) }
-                return (state.packetizer, state.targets, state.idle, state.resends)
+                return (state.packetizer, state.targets, state.idle, state.resends, state.cipher)
             }
             guard let packetizer else { continue }
+            // Sealed once per packet (not per listener) when there's a stream password.
+            func send(_ bytes: UnsafeRawBufferPointer, to addresses: [sockaddr_in]) {
+                if let cipher {
+                    cipher.seal(bytes)?.withUnsafeBytes { sealed in for a in addresses { Self.send(fd, sealed, to: a) } }
+                } else {
+                    for a in addresses { Self.send(fd, bytes, to: a) }
+                }
+            }
             // Always drain, even with nobody listening (or nothing to hear), so sending resumes with fresh audio.
             while packetizer.packets.pop({ bytes in
                 guard !idle else { return }
                 history.store(bytes)
-                for target in targets { Self.send(fd, bytes, to: target) }
+                send(bytes, to: targets)
             }) {}
             for request in resends {
                 for sequence in request.sequences {
-                    history.resend(sequence) { Self.send(fd, $0, to: request.address) }
+                    history.resend(sequence) { send($0, to: [request.address]) }
                 }
             }
             // The input's levels for meters on the other side, idle or not (the capture keeps waking this thread).
@@ -131,7 +169,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                 lastLevels = now
                 let peak = levels.take()
                 let message = StreamWire.control(.levels, StreamWire.Levels(left: peak.left.rounded(), right: peak.right.rounded()))
-                message.withUnsafeBytes { bytes in for target in targets { Self.send(fd, bytes, to: target) } }
+                message.withUnsafeBytes { send($0, to: targets) }
             }
         }
     }
@@ -149,18 +187,34 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
 
     @MainActor private func receiveControl() {
         guard let (data, sender) = UDP.receive(fd) else { return }
-        data.withUnsafeBytes { bytes in
-            guard let kind = StreamWire.kind(of: bytes) else { return }
-            // One listener per Mac: keyed by address alone, so one Mac can't open a stream per port.
-            let key = UDP.string(sender.sin_addr)
+        let key = UDP.string(sender.sin_addr)
+        let opened: Data? = data.withUnsafeBytes { bytes in
+            guard let kind = StreamWire.kind(of: bytes) else { return nil }
             // Everything here is only for ThUNERs found over Bonjour (or this Mac).
             guard UDP.isLoopback(sender.sin_addr) || isKnownPeer?(sender.sin_addr) == true else {
                 if Date().timeIntervalSince(lastIgnoredLog) > 10 {
                     lastIgnoredLog = Date()
                     log.notice("Ignoring stream messages from \(key, privacy: .public): not a ThUNER found over Bonjour")
                 }
-                return
+                return nil
             }
+            // The stream password: sealed with it, or (with none set) not sealed at all. Otherwise a subscriber is
+            // told why, in the clear, and nothing else happens.
+            let sealed = StreamCipher.isSealed(bytes)
+            if let cipher {
+                if sealed, let plain = cipher.open(bytes) { return plain }
+                if kind == .subscribe { passwordProblem(.needed, to: sender) }
+                return nil
+            }
+            if sealed {
+                if kind == .subscribe { passwordProblem(.notSet, to: sender) }
+                return nil
+            }
+            return data
+        }
+        guard let opened else { return }
+        opened.withUnsafeBytes { bytes in
+            guard let kind = StreamWire.kind(of: bytes) else { return }
             switch kind {
             case .subscribe:
                 guard var request = StreamWire.controlBody(StreamWire.Subscribe.self, from: bytes) else { return }
@@ -188,7 +242,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                                                framesPerPacket: packetizer?.framesPerPacket,
                                                captureLatencyFrames: live ? latency : nil, echo: request.sentAt,
                                                idle: live ? idle : nil)
-                UDP.send(fd, StreamWire.control(.status, status), to: sender)
+                reply(StreamWire.control(.status, status), to: sender)
             case .unsubscribe:
                 if let gone = listeners.removeValue(forKey: key) {
                     log.notice("\(gone.host, privacy: .public) stopped listening")
@@ -337,10 +391,23 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private let network = DispatchQueue(label: "com.idallas.thuner.stream-receive", qos: .userInteractive)
     private let log = Logger(subsystem: "com.idallas.thuner", category: "stream")
 
-    init(source: sockaddr_in, host: String, settings: Settings) {
+    /// The stream password's cipher, if one is set (the sender has to have the same one).
+    let cipher: StreamCipher?
+
+    init(source: sockaddr_in, host: String, settings: Settings, cipher: StreamCipher?) {
         sourceAddress = source
         sourceHost = host
         self.settings = settings
+        self.cipher = cipher
+    }
+
+    /// Sends a control message to the sender, sealed if there's a password.
+    private func send(_ message: Data, socket: Int32) {
+        if let cipher {
+            message.withUnsafeBytes { if let sealed = cipher.seal($0) { UDP.send(socket, sealed, to: sourceAddress) } }
+        } else {
+            UDP.send(socket, message, to: sourceAddress)
+        }
     }
 
     var stats: PlayoutStats? { playout?.stats }
@@ -367,7 +434,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
     @MainActor func stop() {
         subscribeTimer?.invalidate()
         subscribeTimer = nil
-        if fd >= 0 { UDP.send(fd, StreamWire.control(.unsubscribe, StreamWire.Subscribe(host: host, method: settings.method)), to: sourceAddress) }
+        if fd >= 0 { send(StreamWire.control(.unsubscribe, StreamWire.Subscribe(host: host, method: settings.method)), socket: fd) }
         source?.cancel()  // closes the socket once no handler is running
         source = nil
         stopOutput()
@@ -377,8 +444,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
     @MainActor private func subscribe() {
         releaseOutputIfQuiet()
         retryOutputIfFailed()
-        UDP.send(fd, StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method, sentAt: HostClock.now())),
-                 to: sourceAddress)
+        send(StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method, sentAt: HostClock.now())),
+             socket: fd)
     }
 
     /// Recent round trips to the sender, in seconds (subscribe → status). Main thread.
@@ -425,8 +492,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
             let arrival = HostClock.now()
             // Only the Mac we subscribed to.
             guard sender.sin_addr.s_addr == sourceAddress.sin_addr.s_addr, sender.sin_port == sourceAddress.sin_port else { continue }
-            buffer.withUnsafeBytes { raw in
-                let bytes = UnsafeRawBufferPointer(rebasing: raw[0..<n])
+            func handle(_ bytes: UnsafeRawBufferPointer) {
+                let n = bytes.count
                 switch StreamWire.kind(of: bytes) {
                 case .audio, .resentAudio:
                     // Only packets that belong to the stream being played (see StreamGate).
@@ -472,6 +539,17 @@ final class AudioStreamReceiver: @unchecked Sendable {
                     break
                 }
             }
+            // The stream password: with one set, only sealed datagrams (and a plain status, which can only say the
+            // passwords don't match) count; with none, only plain ones.
+            buffer.withUnsafeBytes { raw in
+                let bytes = UnsafeRawBufferPointer(rebasing: raw[0..<n])
+                if StreamCipher.isSealed(bytes) {
+                    guard let cipher, let plain = cipher.open(bytes) else { return }
+                    plain.withUnsafeBytes { handle($0) }
+                } else if cipher == nil || StreamWire.kind(of: bytes) == .status {
+                    handle(bytes)
+                }
+            }
         }
     }
 
@@ -485,7 +563,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private func trackLosses(_ header: AudioPacketHeader, at now: Double, socket: Int32) {
         let missing = resendTracker.received(header.sequence, resent: header.resent, at: now) + resendTracker.due(at: now)
         if !missing.isEmpty {
-            UDP.send(socket, StreamWire.control(.resend, StreamWire.Resend(sequences: missing)), to: sourceAddress)
+            send(StreamWire.control(.resend, StreamWire.Resend(sequences: missing)), socket: socket)
         }
         let t = resendTracker
         resendCounts.withLock { $0 = (t.requested, t.recovered, t.abandoned) }

@@ -56,8 +56,8 @@ public enum StreamWire {
     public static let headerSize = 28
     public static let channels = 2
     public static let bytesPerSample = 3
-    /// Keeps a packet inside one Ethernet frame (1472 bytes of UDP payload).
-    public static let maxFramesPerPacket = 240
+    /// Keeps a packet inside one Ethernet frame (1472 bytes of UDP payload), even sealed with a stream password.
+    public static let maxFramesPerPacket = 232
     public static let maxDatagram = 1472
 
     public enum Kind: UInt8, Sendable {
@@ -118,8 +118,17 @@ public enum StreamWire {
         public var echo: Double?
         /// Sharing, but the input has been silent a while, so no audio is being sent until it isn't.
         public var idle: Bool?
+        /// The request couldn't be answered because the stream passwords don't match.
+        public var password: PasswordProblem?
+
+        public enum PasswordProblem: String, Codable, Sendable {
+            /// This Mac has a stream password and the request wasn't sealed with it (none, or a different one).
+            case needed
+            /// The request was sealed, but this Mac has no stream password.
+            case notSet
+        }
         public init(host: String, sharing: Bool, source: String? = nil, sampleRate: Double? = nil, framesPerPacket: Int? = nil,
-                    captureLatencyFrames: Int? = nil, echo: Double? = nil, idle: Bool? = nil) {
+                    captureLatencyFrames: Int? = nil, echo: Double? = nil, idle: Bool? = nil, password: PasswordProblem? = nil) {
             self.host = host
             self.sharing = sharing
             self.source = source
@@ -128,6 +137,7 @@ public enum StreamWire {
             self.captureLatencyFrames = captureLatencyFrames
             self.echo = echo
             self.idle = idle
+            self.password = password
         }
     }
 
@@ -159,18 +169,18 @@ public enum StreamWire {
         return headerSize + count * bytesPerSample
     }
 
-    /// The kind of a datagram, if it's one of ours.
+    /// The kind of a datagram, if it's one of ours (sealed or not: see `StreamCipher`).
     public static func kind(of bytes: UnsafeRawBufferPointer) -> Kind? {
         guard bytes.count >= 6,
               UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) == magic,
               bytes[4] == version else { return nil }
-        return Kind(rawValue: bytes[5])
+        return Kind(rawValue: bytes[5] & ~StreamCipher.sealedFlag)
     }
 
     /// The header of an audio packet, if it's a well-formed one.
     public static func audioHeader(_ bytes: UnsafeRawBufferPointer) -> AudioPacketHeader? {
         let kind = kind(of: bytes)
-        guard kind == .audio || kind == .resentAudio, bytes.count >= headerSize else { return nil }
+        guard kind == .audio || kind == .resentAudio, !StreamCipher.isSealed(bytes), bytes.count >= headerSize else { return nil }
         let channels = Int(bytes[6])
         guard channels == Self.channels, Int(bytes[7]) == bytesPerSample * 8 else { return nil }
         let frames = Int(UInt16(littleEndian: bytes.loadUnaligned(fromByteOffset: 24, as: UInt16.self)))

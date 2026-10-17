@@ -492,3 +492,44 @@ struct SplitMix {
         #expect(!old)
     }
 }
+
+@Suite struct StreamCipherTests {
+    static let cipher = StreamCipher(password: "turntable")!
+
+    private func audioDatagram(frames: Int) -> [UInt8] {
+        let samples = [Float](repeating: 0.3, count: frames * 2)
+        var datagram = [UInt8](repeating: 0, count: StreamWire.maxDatagram)
+        let size = datagram.withUnsafeMutableBytes {
+            StreamWire.writeAudio(AudioPacketHeader(streamID: 4, sequence: 9, sampleTime: 1_152, sampleRate: 48_000, frames: frames),
+                                  samples: samples, to: $0.baseAddress!)
+        }
+        return Array(datagram[0..<size])
+    }
+
+    @Test func sealsAndOpensWithTheSamePassword() {
+        let plain = audioDatagram(frames: 128)
+        let sealed = plain.withUnsafeBytes { Self.cipher.seal($0) }!
+        sealed.withUnsafeBytes { bytes in
+            #expect(StreamCipher.isSealed(bytes))
+            #expect(StreamWire.kind(of: bytes) == .audio)
+            #expect(StreamWire.audioHeader(bytes) == nil)  // nothing reads a sealed packet as audio
+            #expect(Self.cipher.open(bytes).map(Array.init) == plain)
+            #expect(StreamCipher(password: "turntables")!.open(bytes) == nil)
+        }
+    }
+
+    @Test func rejectsTamperingWithTheHeaderOrBody() {
+        var sealed = Array(audioDatagram(frames: 128).withUnsafeBytes { Self.cipher.seal($0) }!)
+        sealed[5] = StreamWire.Kind.resentAudio.rawValue | 0x80
+        #expect(sealed.withUnsafeBytes { Self.cipher.open($0) } == nil)
+        sealed = Array(audioDatagram(frames: 128).withUnsafeBytes { Self.cipher.seal($0) }!)
+        sealed[100] ^= 1
+        #expect(sealed.withUnsafeBytes { Self.cipher.open($0) } == nil)
+    }
+
+    @Test func theLargestPacketStillFitsOneFrameSealed() {
+        let sealed = audioDatagram(frames: StreamWire.maxFramesPerPacket).withUnsafeBytes { Self.cipher.seal($0) }!
+        #expect(sealed.count <= StreamWire.maxDatagram)
+        #expect(StreamCipher(password: "") == nil)
+    }
+}

@@ -99,6 +99,22 @@ final class AppModel {
         outputDevices.first { $0.uid == streamOutputUID }
     }
     static let streamThisMac = "This Mac"
+    /// The stream password (both Macs need the same one): seals and encrypts everything between them. Kept in the
+    /// Keychain; empty for none.
+    var streamPassword: String {
+        didSet {
+            guard streamPassword != oldValue else { return }
+            if streamPassword.isEmpty { Keychain.delete(account: "stream-password") } else { Keychain.write(streamPassword, account: "stream-password") }
+            applyStreamPassword()
+        }
+    }
+    @ObservationIgnored private var streamCipher: StreamCipher?
+
+    private func applyStreamPassword() {
+        streamCipher = StreamCipher(password: streamPassword)
+        streamSender.cipher = streamCipher
+        applyStreamReceiver()
+    }
     /// Who's listening to this Mac.
     private(set) var streamListeners: [String] = []
     /// While listening: the playout's numbers, what the other Mac says it's sending, and any problem.
@@ -659,6 +675,13 @@ final class AppModel {
         streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
         streamOutputUID = d.string(forKey: "streamOutputUID")
         streamOutputChannel = d.integer(forKey: "streamOutputChannel")
+        // Set over SSH on a headless Mac (`defaults write com.idallas.thuner streamPassword …`): move it into the
+        // Keychain and out of the readable preferences.
+        if let typed = d.string(forKey: "streamPassword") {
+            if typed.isEmpty { Keychain.delete(account: "stream-password") } else { Keychain.write(typed, account: "stream-password") }
+            d.removeObject(forKey: "streamPassword")
+        }
+        streamPassword = Keychain.read(String.self, account: "stream-password") ?? ""
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
         gate = LevelGate(thresholdDB: threshold)
@@ -696,6 +719,8 @@ final class AppModel {
 
         capture.streamSink = streamSender
         streamSender.sharing = streamSharing
+        streamCipher = StreamCipher(password: streamPassword)
+        streamSender.cipher = streamCipher
         streamSender.isKnownPeer = { [weak self] address in
             MainActor.assumeIsolated { self?.peers.isKnownPeer(address) ?? false }
         }
@@ -885,13 +910,19 @@ final class AppModel {
         }
         let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID,
                                                     outputChannel: streamOutputUID == nil ? 0 : streamOutputChannel)
-        let receiver = AudioStreamReceiver(source: address, host: streamSource, settings: settings)
+        let receiver = AudioStreamReceiver(source: address, host: streamSource, settings: settings, cipher: streamCipher)
         receiver.onChange = { [weak self, weak receiver] in
             MainActor.assumeIsolated {
                 guard let self, let receiver, receiver === self.streamReceiver else { return }
                 self.streamSenderStatus = receiver.status
-                self.streamProblem = receiver.error
-                    ?? (receiver.status?.sharing == false ? "\(receiver.status?.host ?? self.streamSource) isn't sharing its input" : nil)
+                let other = receiver.status?.host ?? self.streamSource
+                self.streamProblem = receiver.error ?? {
+                    switch receiver.status?.password {
+                    case .needed: return "\(other) has a stream password, and this Mac's is missing or different"
+                    case .notSet: return "\(other) has no stream password; clear this Mac's to listen"
+                    case nil: return receiver.status?.sharing == false ? "\(other) isn't sharing its input" : nil
+                    }
+                }()
             }
         }
         streamReceiver = receiver
