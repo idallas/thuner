@@ -2,9 +2,11 @@ import CoreAudio
 import ThunerCore
 import os
 
-/// Reads two channels of an input device straight from Core Audio (an IOProc on the device's real-time thread),
-/// for sharing. AVAudioEngine hands its nodes 512-frame batches whatever the device runs at, which is 10 ms of
-/// latency and burstiness on its own; an IOProc gets each I/O buffer as the device delivers it.
+/// Reads two channels of an input device straight from Core Audio (an IOProc on the device's real-time thread):
+/// ThUNER's capture for listening, sharing and meters. AVAudioEngine hands its nodes 512-frame batches whatever
+/// the device runs at, and after switching away from the default input it kept the default's sample rate and
+/// (on a Mac whose devices then ran at different rates) delivered only silence. An IOProc gets each I/O buffer
+/// as the device delivers it, at the device's own rate.
 final class DeviceInputTap {
     enum TapError: LocalizedError {
         case unsupportedFormat
@@ -26,20 +28,17 @@ final class DeviceInputTap {
     private let left: UnsafeMutablePointer<Float>
     private let right: UnsafeMutablePointer<Float>
     private static let maxFrames = 8_192
+    private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
 
     /// `firstChannel` is zero-based across all of the device's input channels; a mono device (or a last odd
-    /// channel) is sent as both sides.
-    init(device: AudioDeviceID, firstChannel: Int, ioBufferFrames: Int, packetizer makePacketizer: (Double) -> Packetizer,
-         levels: PeakLevels, ready: @escaping () -> Void) throws {
+    /// channel) comes out as both sides. Each buffer goes to `fifo` (for listening), `levels` (meters) and, when
+    /// sharing, a packetizer made for the device's rate, calling `ready` when packets are done.
+    init(device: AudioDeviceID, firstChannel: Int, ioBufferFrames: Int, fifo: FrameFIFO?, levels: PeakLevels?,
+         packetizer makePacketizer: ((Double) -> Packetizer)?, ready: (() -> Void)?) throws {
         self.device = device
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var rate: Float64 = 0
-        var size = UInt32(MemoryLayout<Float64>.size)
-        var status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate)
-        guard status == noErr, rate > 0 else { throw TapError.coreAudio("read the input's sample rate", status) }
+        guard let rate = AudioDevices.nominalSampleRate(device) else {
+            throw TapError.coreAudio("read the input's sample rate", -1)
+        }
         sampleRate = rate
 
         // Where each device channel lives: input streams arrive as one buffer each, channels interleaved within.
@@ -50,12 +49,13 @@ final class DeviceInputTap {
         let second = first + 1 < total ? first + 1 : first
         let leftAt = Self.locate(first, in: layout.channelsPerBuffer)
         let rightAt = Self.locate(second, in: layout.channelsPerBuffer)
+        channelLabel = second == first ? "\(first + 1)" : "\(first + 1)–\(second + 1)"
 
         let l = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxFrames)
         let r = UnsafeMutablePointer<Float>.allocate(capacity: Self.maxFrames)
-        let packetizer = makePacketizer(rate)
+        let packetizer = makePacketizer?(rate)
         var procID: AudioDeviceIOProcID?
-        status = AudioDeviceCreateIOProcIDWithBlock(&procID, device, nil) { _, input, inputTime, _, _ in
+        let status = AudioDeviceCreateIOProcIDWithBlock(&procID, device, nil) { _, input, inputTime, _, _ in
             let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
             guard buffers.count > max(leftAt.buffer, rightAt.buffer),
                   let lData = buffers[leftAt.buffer].mData, let rData = buffers[rightAt.buffer].mData else { return }
@@ -68,9 +68,12 @@ final class DeviceInputTap {
                 l[i] = ls[i * lStride + leftAt.offset]
                 r[i] = rs[i * rStride + rightAt.offset]
             }
-            levels.record(left: l, right: r, frames: frames)
-            let time = inputTime.pointee.mFlags.contains(.sampleTimeValid) ? inputTime.pointee.mSampleTime : nil
-            if packetizer.append(left: l, right: r, frames: frames, inputTime: time) > 0 { ready() }
+            fifo?.write(left: l, right: r, frames: frames)
+            levels?.record(left: l, right: r, frames: frames)
+            if let packetizer {
+                let time = inputTime.pointee.mFlags.contains(.sampleTimeValid) ? inputTime.pointee.mSampleTime : nil
+                if packetizer.append(left: l, right: r, frames: frames, inputTime: time) > 0 { ready?() }
+            }
         }
         guard status == noErr, procID != nil else {
             l.deallocate()
@@ -84,7 +87,10 @@ final class DeviceInputTap {
         requestedIOFrames = ioBufferFrames
     }
 
-    let packetizer: Packetizer
+    /// When sharing.
+    let packetizer: Packetizer?
+    /// The device channels being read, for logs ("3–4").
+    let channelLabel: String
     private let requestedIOFrames: Int
 
     func start() throws {
@@ -95,7 +101,7 @@ final class DeviceInputTap {
         // After starting, so nothing else in this process sets it back.
         ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
         // The newest frame in each buffer is a buffer late already; then a packet may wait for the next buffer.
-        let packet = packetizer.framesPerPacket
+        let packet = packetizer?.framesPerPacket ?? 0
         latencyFrames = AudioDevices.latencyFrames(device, scope: kAudioDevicePropertyScopeInput) + ioBufferFrames
             + max(packet - ioBufferFrames, 0)
     }
@@ -103,7 +109,23 @@ final class DeviceInputTap {
     /// Jacks to sent packet, roughly, once started.
     private(set) var latencyFrames = 0
 
+    /// Calls `handler` on the main queue if the device changes rate or goes away (capture has to start again).
+    func onChange(_ handler: @escaping () -> Void) {
+        for selector in [kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyDeviceIsAlive] {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
+            if AudioObjectAddPropertyListenerBlock(device, &address, .main, block) == noErr {
+                listeners.append((address, block))
+            }
+        }
+    }
+
     deinit {
+        for (address, block) in listeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(device, &address, .main, block)
+        }
         if let proc {
             AudioDeviceStop(device, proc)
             AudioDeviceDestroyIOProcID(device, proc)

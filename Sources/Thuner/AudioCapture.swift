@@ -51,7 +51,7 @@ final class SampleRing: @unchecked Sendable {
     }
 }
 
-/// Captures from a specific Core Audio input device with AVAudioEngine, reports levels, and keeps a ring of
+/// Captures from a specific Core Audio input device (an IOProc, `DeviceInputTap`), reports levels, and keeps a ring of
 /// recent audio for matching.
 final class AudioCapture: @unchecked Sendable {
     struct Config: Equatable {
@@ -72,6 +72,7 @@ final class AudioCapture: @unchecked Sendable {
         case deviceNotFound(String)
         case cannotSelectDevice(OSStatus)
         case noChannels
+        case noInput
         case waitingForApps(String)
 
         var errorDescription: String? {
@@ -79,6 +80,7 @@ final class AudioCapture: @unchecked Sendable {
             case .deviceNotFound(let uid): "Input device not found (\(uid))"
             case .cannotSelectDevice(let status): "Couldn't select input device (OSStatus \(status))"
             case .noChannels: "The input device has no channels"
+            case .noInput: "No input device"
             case .waitingForApps(let names): "Waiting for \(names) to play"
             }
         }
@@ -91,17 +93,20 @@ final class AudioCapture: @unchecked Sendable {
     let peaks = PeakLevels()
     /// RMS level in dBFS for each captured buffer. Called on the audio tap's thread.
     var onLevel: ((Double) -> Void)?
-    /// The engine stopped on its own (device unplugged, format change). Called on the main queue.
+    /// Capture needs to start again (device unplugged or changed rate, default input changed). Main queue.
     var onInterrupted: (() -> Void)?
     /// Gets the audio when `Config.streamFrames` is set.
     var streamSink: StreamSink?
 
-    private var engine: AVAudioEngine?
-    private var configObserver: NSObjectProtocol?
+    /// Drains the input tap into `process` every 50 ms.
+    private var processingTimer: DispatchSourceTimer?
+    private let processing = DispatchQueue(label: "com.idallas.thuner.capture", qos: .userInitiated)
+    private var followingDefault = false
+    private var watchingDefault = false
     private let log = Logger(subsystem: "com.idallas.thuner", category: "capture")
 
     private(set) var activeDeviceName: String?
-    /// Reads the input directly for sharing, alongside the engine (which can't deliver small buffers).
+    /// Reads the input (and shares it, when sharing).
     private var inputTap: DeviceInputTap?
     /// The system audio tap while "System Audio" is the input; released (and torn down) on stop.
     private var systemTap: SystemAudioTap?
@@ -129,97 +134,77 @@ final class AudioCapture: @unchecked Sendable {
             return
         }
         stopWatchingApps()
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-
-        let device: AudioInputDevice?
+        let device: AudioInputDevice
         if let uid = config.deviceUID {
             guard let d = AudioDevices.device(uid: uid) else { throw CaptureError.deviceNotFound(uid) }
             device = d
         } else {
-            device = AudioDevices.defaultInputDevice()
+            guard let d = AudioDevices.defaultInputDevice() else { throw CaptureError.noInput }
+            device = d
         }
-        if let device, config.deviceUID != nil, let unit = input.audioUnit {
-            var id = device.id
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                              &id, UInt32(MemoryLayout<AudioDeviceID>.size))
-            guard status == noErr else { throw CaptureError.cannotSelectDevice(status) }
-        }
-        activeDeviceName = device?.name
-
-        // AVAudioEngine hands us only the first couple of a multichannel interface's inputs, so a channel pair
-        // further up (an M4's 3–4, say) has to be routed through the input unit's channel map: map the
-        // engine's channels onto the device channels we want.
-        var mapped: ClosedRange<Int>?
+        followDefaultInput(config.deviceUID == nil)
         // A stereo (or mono) device always uses its own channels, whatever was picked for a bigger interface.
-        var config = config
-        if let device, device.inputChannels <= 2 { config.firstChannel = 0 }
-        if let device, config.firstChannel > 0, let unit = input.audioUnit {
-            let engineChannels = Int(input.outputFormat(forBus: 0).channelCount)
-            let first = min(config.firstChannel, device.inputChannels - 1)
-            let last = min(first + max(config.channelCount, 1), device.inputChannels) - 1
-            var map = (0..<max(engineChannels, 1)).map { i in Int32(first + i <= last ? first + i : -1) }
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Output, 1,
-                                              &map, UInt32(MemoryLayout<Int32>.size * map.count))
-            if status == noErr {
-                mapped = first...last
-            } else {
-                log.error("Couldn't map input channels (OSStatus \(status))")
-            }
-        }
+        let firstChannel = device.inputChannels <= 2 ? 0 : config.firstChannel
 
-        let format = input.outputFormat(forBus: 0)
-        let engineChannels = Int(format.channelCount)
-        guard engineChannels > 0 else { throw CaptureError.noChannels }
+        let fifo = FrameFIFO(capacity: 1 << 17)
+        let sharing = config.streamFrames != nil ? streamSink : nil
+        let tap = try DeviceInputTap(
+            device: device.id, firstChannel: firstChannel,
+            ioBufferFrames: sharing != nil ? config.streamIOBufferFrames : 512,
+            fifo: fifo, levels: sharing?.levels,
+            packetizer: config.streamFrames.map { frames in { Packetizer(framesPerPacket: frames, sampleRate: $0) } },
+            ready: sharing.map { sink in { sink.packetsReady() } })
 
-        let channels: Range<Int>
-        if let mapped {
-            channels = 0..<min(mapped.count, engineChannels)
-        } else {
-            let first = min(max(config.firstChannel, 0), engineChannels - 1)
-            channels = first..<min(first + max(config.channelCount, 1), engineChannels)
-        }
-        let channelLabel = mapped.map { "\($0.lowerBound + 1)–\($0.upperBound + 1)" }
-            ?? "\(channels.lowerBound + 1)–\(channels.upperBound)"
-
-        let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)!
+        // Listening: every 50 ms, whatever arrived goes through the downmix, the level and the match ring.
+        let rate = tap.sampleRate
+        let stereo = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: false)!
+        let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
         let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.matchSampleRate, channels: 1, interleaved: false)!
-        // Owned by this tap's closure, so a restart on the main thread never swaps it out under a callback
-        // that's still running on the audio thread.
-        let converter = format.sampleRate == Self.matchSampleRate ? nil : AVAudioConverter(from: mono, to: target)
-
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            self?.process(buffer, channels: channels, mono: mono, target: target, converter: converter)
-        }
-
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            self?.configurationChanged(engine: engine, tapFormat: format)
-        }
-
-        engine.prepare()
-        try engine.start()
-        self.engine = engine
-        ring.clear()
-        if let frames = config.streamFrames, let streamSink, let device {
-            do {
-                let tap = try DeviceInputTap(device: device.id, firstChannel: config.firstChannel,
-                                             ioBufferFrames: config.streamIOBufferFrames,
-                                             packetizer: { Packetizer(framesPerPacket: frames, sampleRate: $0) },
-                                             levels: streamSink.levels, ready: { streamSink.packetsReady() })
-                try tap.start()
-                inputTap = tap
-                streamSink.attach(tap.packetizer, source: device.name, latencyFrames: tap.latencyFrames)
-                log.notice("Sharing \(device.name, privacy: .public), I/O buffer \(tap.ioBufferFrames) frames")
-            } catch {
-                log.error("Couldn't share the input: \(error.localizedDescription, privacy: .public)")
+        let converter = rate == Self.matchSampleRate ? nil : AVAudioConverter(from: mono, to: target)
+        let chunk = AVAudioPCMBuffer(pcmFormat: stereo, frameCapacity: 16_384)!
+        let timer = DispatchSource.makeTimerSource(queue: processing)
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05)
+        timer.setEventHandler { [weak self] in
+            while let data = chunk.floatChannelData {
+                let n = fifo.read(into: data[0], data[1], max: Int(chunk.frameCapacity))
+                guard n > 0 else { break }
+                chunk.frameLength = AVAudioFrameCount(n)
+                self?.process(chunk, channels: 0..<2, mono: mono, target: target, converter: converter)
+                if n < Int(chunk.frameCapacity) { break }
             }
         }
-        // The engine keeps the default input's rate on its side and converts if the chosen device runs at another.
-        let deviceRate = device.flatMap { AudioDevices.nominalSampleRate($0.id) } ?? format.sampleRate
-        let rates = deviceRate == format.sampleRate ? "\(format.sampleRate) Hz" : "\(deviceRate) Hz (engine converts to \(format.sampleRate) Hz)"
-        log.notice("Capturing from \(self.activeDeviceName ?? "default input", privacy: .public), channels \(channelLabel, privacy: .public) @ \(rates, privacy: .public)")
+
+        try tap.start()
+        timer.resume()
+        tap.onChange { [weak self] in
+            self?.log.notice("Input device changed; restarting")
+            self?.onInterrupted?()
+        }
+        inputTap = tap
+        processingTimer = timer
+        activeDeviceName = device.name
+        ring.clear()
+        log.notice("Capturing from \(device.name, privacy: .public), channels \(tap.channelLabel, privacy: .public) @ \(rate) Hz, I/O buffer \(tap.ioBufferFrames) frames")
+        if let sharing, let packetizer = tap.packetizer {
+            sharing.attach(packetizer, source: device.name, latencyFrames: tap.latencyFrames)
+            log.notice("Sharing \(device.name, privacy: .public)")
+        }
+    }
+
+    /// With no input chosen, capture follows the system's default input: start again when it changes.
+    private func followDefaultInput(_ follow: Bool) {
+        followingDefault = follow
+        guard follow, !watchingDefault else { return }
+        watchingDefault = true
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main) { [weak self] _, _ in
+            guard let self, self.followingDefault, self.inputTap != nil else { return }
+            self.log.notice("Default input changed; restarting")
+            self.onInterrupted?()
+        }
     }
 
     /// What this Mac is playing, read straight from a process tap (no AVAudioEngine involved).
@@ -260,38 +245,12 @@ final class AudioCapture: @unchecked Sendable {
         log.notice("Capturing system audio, \(channels.count) ch @ \(format.sampleRate) Hz")
     }
 
-    /// AVAudioEngine stops itself on any configuration change, and selecting a non-default input device can
-    /// post one right after starting (seen with a 44.1 kHz Loopback device). Rebuilding the engine selects the
-    /// device again and triggers another, so when the input's format is unchanged just restart this engine;
-    /// only a real change (device gone, new rate or channel count) gets a full restart.
-    private func configurationChanged(engine: AVAudioEngine, tapFormat: AVAudioFormat) {
-        guard engine === self.engine else { return }
-        let now = engine.inputNode.outputFormat(forBus: 0)
-        if now.sampleRate == tapFormat.sampleRate, now.channelCount == tapFormat.channelCount {
-            if !engine.isRunning {
-                do {
-                    try engine.start()
-                    log.notice("Audio configuration changed; resumed")
-                } catch {
-                    log.error("Couldn't resume after a configuration change: \(error.localizedDescription, privacy: .public)")
-                    onInterrupted?()
-                }
-            }
-            return
-        }
-        log.notice("Audio input format changed (\(tapFormat.sampleRate) → \(now.sampleRate) Hz); restarting")
-        onInterrupted?()
-    }
-
     func stop() {
         streamSink?.attach(nil, source: nil, latencyFrames: 0)
-        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
-        configObserver = nil
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        systemTap = nil
+        processingTimer?.cancel()
+        processingTimer = nil
         inputTap = nil
+        systemTap = nil
     }
 
     /// Asks for a small I/O buffer on the device. Core Audio gives every app on the device the smallest any of them

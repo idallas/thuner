@@ -50,6 +50,9 @@ final class AppLinkClient {
     private var buffer = Data()
     private var enabled = false
     private var retry: DispatchWorkItem?
+    /// Seconds before the next attempt: 4 at first, doubling to a minute while Twist Commando isn't there (on a
+    /// Mac without it, every attempt fills the system log with connection messages).
+    private var retryDelay = 4.0
     private let log = Logger(subsystem: "com.idallas.thuner", category: "applink")
 
     init(controls: [Control]) {
@@ -113,6 +116,7 @@ final class AppLinkClient {
         guard connection === self.connection else { return }
         switch state {
         case .ready:
+            retryDelay = 4
             buffer.removeAll()
             send(["type": "hello", "app": Bundle.main.bundleIdentifier ?? "com.idallas.thuner", "name": "ThUNER", "protocol": 2])
             receive(on: connection)
@@ -136,7 +140,8 @@ final class AppLinkClient {
             MainActor.assumeIsolated { self?.connect() }
         }
         retry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay, execute: work)
+        retryDelay = min(retryDelay * 2, 60)
     }
 
     private func setConnected(_ version: String?) {

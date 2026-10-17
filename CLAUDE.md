@@ -16,7 +16,7 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 ### Requirements
 
 - **Input device selection**: line-in on the turntable Mac, the mic on the main Mac.
-- **Audio capture**: use `AVAudioEngine`, selecting the input device through Core Audio.
+- **Audio capture**: a Core Audio IOProc on the chosen input device (originally `AVAudioEngine`; see Audio streaming for why not).
 - **Matching**: use plain `SHSession` (ShazamKit) fed with our own buffers. Don't use `SHManagedSession`, because it only listens to the default input.
 - **Local silence detection**: an RMS/level threshold that can be adjusted to sit above vinyl surface noise.
 - **State machine**:
@@ -51,9 +51,9 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 2. **Audio streaming** (built, proof of concept; replaces SonoBus): one ThUNER shares its input, another plays it, for same-room listening, so latency matters.
    - Wire (`ThunerCore/Streaming`): UDP port 47476, 24-bit stereo, 128-frame packets stamped with the input device's own sample time (`Packetizer`), plus JSON subscribe/status messages. The sender only sends to ThUNERs that subscribe each second and that PeerLink found over Bonjour (or loopback).
    - Two playout methods, chosen on the listening Mac (Settings → Streaming): `RawPlayout` (a FIFO, with drift fixed by dropping/repeating a frame over a 16-sample crossfade; for Ethernet) and `ResilientPlayout` (SonoBus-style: packets placed by timestamp, buffer sized from measured jitter, Hermite resampling steered by the buffer level). Both measure fill against a continuous estimate of the sender's position, not the raw fill, which jumps by a packet whenever arrivals slide past output requests. Simulated drift/jitter/loss tests in `StreamingTests`.
-   - Sender (`DeviceInputTap`): a Core Audio IOProc on the input device at a 128-frame I/O buffer. AVAudioEngine nodes get 512-frame batches whatever the device runs at, so the engine can't be used for this. Receiver (`AudioStreamReceiver`): network thread → `SPSCRing` → `AVAudioSourceNode` render thread. Use `mach_absolute_time()` in the render callback, not the timestamp's host time (that's the future presentation time).
+   - Sender (`DeviceInputTap`): a Core Audio IOProc on the input device at a 128-frame I/O buffer. AVAudioEngine nodes get 512-frame batches whatever the device runs at, so the engine can't be used for this. Receiver (`AudioStreamReceiver`): network thread → `SPSCRing` → `DeviceOutputTap` (an IOProc on the chosen output pair). Use `mach_absolute_time()` in the render callback, not a timestamp's host time (an output's is the future presentation time).
    - Idle: the sender stops sending after 60 s below the silence threshold (resumes on the first louder reading); the receiver closes its output after 2 s without audio and reopens on the next packet. IOProcs disable the direction they don't use (`kAudioDevicePropertyIOProcStreamUsage`), or an output IOProc on an interface with inputs counts as recording (orange mic indicator). The log line "Core Audio says ThUNER is recording/playing" checks it.
-   - AVAudioEngine keeps the default input's sample rate on its side after switching to another device (say the default is a 44.1 kHz Loopback device and the interface runs at 48 kHz) and converts; harmless for Shazam.
+   - Capture doesn't use AVAudioEngine any more: `DeviceInputTap` (an IOProc on the input device) feeds listening (a `FrameFIFO` drained every 50 ms into the downmix, level gate and match ring), the meters and sharing. AVAudioEngine kept the default input's sample rate after switching devices and, once the chosen interface ran at a different rate, delivered silence (Shazam heard nothing, no error).
    - Settings: `streamSharing`, `streamSource` (host name, or "This Mac" for a loopback test), `streamMethod` (raw/resilient), `streamMarginMs`, `streamOutputUID`. Stats are logged every 10 seconds while listening.
    - Not yet: sharing while listening is paused, low-latency System Audio sharing, resend requests for lost packets, compression, an end-to-end latency measurement.
 3. **Catalog mode** (for old DJ vinyl): play a record, log matches with confidence scores, review them, then push to a playlist.
@@ -76,7 +76,7 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 
 ## Development
 
-- Layout: `Sources/ThunerCore` (pure logic: `NowPlayingMachine`, `LevelGate`, `PushArbiter`, `Track`; unit tested), `Sources/Thuner` (menu bar app: Core Audio device selection, `AVAudioEngine` capture, `SHSession` matching, iTunes lookup for track length, UDP-broadcast peer link on port 47474, Tuneshine sink).
+- Layout: `Sources/ThunerCore` (pure logic: `NowPlayingMachine`, `LevelGate`, `PushArbiter`, `Track`; unit tested), `Sources/Thuner` (menu bar app: Core Audio device selection, IOProc capture (`DeviceInputTap`), `SHSession` matching, iTunes lookup for track length, UDP-broadcast peer link on port 47474, Tuneshine sink).
 - Scripts default `DEVELOPER_DIR` to `/Applications/Xcode.app/Contents/Developer`; do the same for `swift` commands if Xcode isn't the active developer dir.
 - Per-machine settings for the scripts (signing identity, bundle ID, notary profile, update-check stats, website folder and deploy target) live in `Scripts/config.local.sh`, which git ignores; `Scripts/config.example.sh` documents them. Without it, builds are ad-hoc signed.
 - Test: `swift test`. Build the app: `Scripts/build-app.sh` (output `build/Thuner.app`, universal arm64 + x86_64, Sparkle.framework embedded and signed inside-out). Development builds are versioned `<version>-dev` with build number 999999999999 so Sparkle never replaces them.

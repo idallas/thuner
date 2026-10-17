@@ -419,3 +419,21 @@ struct SplitMix {
         #expect(levels.takeIfFresh()! == (left: -160, right: -160))
     }
 }
+
+@Suite struct FrameFIFOTests {
+    @Test func passesFramesInOrderAndDropsTheOldestWhenBehind() {
+        let fifo = FrameFIFO(capacity: 4_096)
+        let ramp = (0..<3_000).map(Float.init)
+        fifo.write(left: ramp, right: ramp.map { -$0 }, frames: 3_000)
+        var l = [Float](repeating: 0, count: 8_192), r = l
+        #expect(fifo.read(into: &l, &r, max: 1_000) == 1_000)
+        #expect(l[999] == 999 && r[999] == -999)
+        #expect(fifo.read(into: &l, &r, max: 8_192) == 2_000)
+        #expect(l[0] == 1_000)
+        #expect(fifo.read(into: &l, &r, max: 8_192) == 0)
+        // Far behind: only the newest (capacity - 1024) frames come out.
+        for _ in 0..<3 { fifo.write(left: ramp, right: ramp, frames: 3_000) }
+        #expect(fifo.read(into: &l, &r, max: 8_192) == 3_072)
+        #expect(l[3_071] == 2_999)
+    }
+}
