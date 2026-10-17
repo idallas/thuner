@@ -6,7 +6,8 @@ import os
 /// Where shared audio goes: each capture start hands it a fresh packetizer (nil on stop), and the capture thread
 /// calls `packetsReady` whenever it finishes packets.
 protocol StreamSink: AnyObject, Sendable {
-    func attach(_ packetizer: Packetizer?, source: String?)
+    /// `latencyFrames`: from the input's jacks to a sent packet, roughly.
+    func attach(_ packetizer: Packetizer?, source: String?, latencyFrames: Int)
     func packetsReady()
 }
 
@@ -204,7 +205,7 @@ final class AudioCapture: @unchecked Sendable {
                                              ready: { streamSink.packetsReady() })
                 try tap.start()
                 inputTap = tap
-                streamSink.attach(tap.packetizer, source: device.name)
+                streamSink.attach(tap.packetizer, source: device.name, latencyFrames: tap.latencyFrames)
                 log.notice("Sharing \(device.name, privacy: .public), I/O buffer \(tap.ioBufferFrames) frames")
             } catch {
                 log.error("Couldn't share the input: \(error.localizedDescription, privacy: .public)")
@@ -241,7 +242,10 @@ final class AudioCapture: @unchecked Sendable {
             self?.process(buffer, channels: channels, mono: mono, target: target, converter: converter)
         }
         systemTap = tap
-        if let streamPacketizer { streamSink?.attach(streamPacketizer, source: SystemAudioTap.name) }
+        if let streamPacketizer {
+            // The tap's buffers aren't asked to be small; guess at its usual 512.
+            streamSink?.attach(streamPacketizer, source: SystemAudioTap.name, latencyFrames: 512 + streamPacketizer.framesPerPacket)
+        }
         activeDeviceName = SystemAudioTap.name
         ring.clear()
         log.notice("Capturing system audio, \(channels.count) ch @ \(format.sampleRate) Hz")
@@ -271,7 +275,7 @@ final class AudioCapture: @unchecked Sendable {
     }
 
     func stop() {
-        streamSink?.attach(nil, source: nil)
+        streamSink?.attach(nil, source: nil, latencyFrames: 0)
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
         engine?.inputNode.removeTap(onBus: 0)

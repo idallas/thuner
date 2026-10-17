@@ -25,5 +25,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppWindows.shared.pulseMenuBarIcon = { [weak panel] in panel?.pulseIcon() }
         AppWindows.shared.openPanel = { [weak panel] in panel?.openPanel() }
         if !model.onboardingComplete { AppWindows.shared.show(.welcome) }
+        // `open Thuner.app --args -openSettingsPane streaming`: straight to a settings tab (for checking UI, or a
+        // headless Mac over Screen Sharing).
+        if let pane = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openSettingsPane"] as? String,
+           let target = SettingsView.Pane(rawValue: pane) {
+            AppWindows.shared.showSettings(target)
+        }
+        if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openPanel"] != nil {
+            panel.openPanel()
+        }
     }
 }

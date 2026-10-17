@@ -71,9 +71,12 @@ public enum StreamWire {
     public struct Subscribe: Codable, Sendable, Equatable {
         public var host: String
         public var method: StreamMethod
-        public init(host: String, method: StreamMethod) {
+        /// The receiver's clock when it sent this; the status reply echoes it back, timing the round trip.
+        public var sentAt: Double?
+        public init(host: String, method: StreamMethod, sentAt: Double? = nil) {
             self.host = host
             self.method = method
+            self.sentAt = sentAt
         }
     }
 
@@ -85,12 +88,20 @@ public enum StreamWire {
         public var source: String?
         public var sampleRate: Double?
         public var framesPerPacket: Int?
-        public init(host: String, sharing: Bool, source: String? = nil, sampleRate: Double? = nil, framesPerPacket: Int? = nil) {
+        /// How long audio takes from the input's jacks to a sent packet: the device's latency and I/O buffer, plus
+        /// waiting for a packet to fill.
+        public var captureLatencyFrames: Int?
+        /// The subscribe's `sentAt`, sent straight back.
+        public var echo: Double?
+        public init(host: String, sharing: Bool, source: String? = nil, sampleRate: Double? = nil, framesPerPacket: Int? = nil,
+                    captureLatencyFrames: Int? = nil, echo: Double? = nil) {
             self.host = host
             self.sharing = sharing
             self.source = source
             self.sampleRate = sampleRate
             self.framesPerPacket = framesPerPacket
+            self.captureLatencyFrames = captureLatencyFrames
+            self.echo = echo
         }
     }
 

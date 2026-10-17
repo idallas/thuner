@@ -71,7 +71,11 @@ final class DeviceOutputTap {
         let status = AudioDeviceStart(device, proc)
         guard status == noErr else { throw DeviceInputTap.TapError.coreAudio("start the output", status) }
         ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
+        latencyFrames = AudioDevices.latencyFrames(device, scope: kAudioDevicePropertyScopeOutput) + ioBufferFrames
     }
+
+    /// From rendering a buffer to it leaving the jacks, roughly, once started.
+    private(set) var latencyFrames = 0
 
     deinit {
         if let proc {

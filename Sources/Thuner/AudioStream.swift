@@ -31,6 +31,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     private struct Shared {
         var packetizer: Packetizer?
         var source: String?
+        var latencyFrames = 0
         var targets: [sockaddr_in] = []
     }
     private let shared = Mutex(Shared())
@@ -65,10 +66,11 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
 
     // MARK: StreamSink (capture threads)
 
-    func attach(_ packetizer: Packetizer?, source: String?) {
+    func attach(_ packetizer: Packetizer?, source: String?, latencyFrames: Int) {
         shared.withLock {
             $0.packetizer = packetizer
             $0.source = source
+            $0.latencyFrames = latencyFrames
         }
         ready.signal()
     }
@@ -108,7 +110,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                     log.notice("Ignoring a stream request from \(key, privacy: .public): not a ThUNER found over Bonjour")
                     return
                 }
-                let (packetizer, input) = shared.withLock { ($0.packetizer, $0.source) }
+                let (packetizer, input, latency) = shared.withLock { ($0.packetizer, $0.source, $0.latencyFrames) }
                 let live = sharing && packetizer != nil
                 if live {
                     if listeners[key] == nil { log.notice("\(request.host, privacy: .public) started listening (\(request.method.rawValue, privacy: .public))") }
@@ -118,7 +120,8 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                 }
                 let status = StreamWire.Status(host: host, sharing: live, source: live ? input : nil,
                                                sampleRate: packetizer.map { Double($0.sampleRate) },
-                                               framesPerPacket: packetizer?.framesPerPacket)
+                                               framesPerPacket: packetizer?.framesPerPacket,
+                                               captureLatencyFrames: live ? latency : nil, echo: request.sentAt)
                 UDP.send(fd, StreamWire.control(.status, status), to: sender)
             case .unsubscribe:
                 if let gone = listeners.removeValue(forKey: key) {
@@ -226,7 +229,36 @@ final class AudioStreamReceiver: @unchecked Sendable {
     }
 
     @MainActor private func subscribe() {
-        UDP.send(fd, StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method)), to: sourceAddress)
+        UDP.send(fd, StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method, sentAt: HostClock.now())),
+                 to: sourceAddress)
+    }
+
+    /// Recent round trips to the sender, in seconds (subscribe → status). Main thread.
+    private var roundTrips: [Double] = []
+
+    /// End-to-end latency, roughly, in ms: the sender's input, the network, the buffer, this Mac's output.
+    struct Latency: Equatable {
+        var captureMs: Double
+        var networkMs: Double
+        var bufferMs: Double
+        var outputMs: Double
+        /// The part of the playout's buffer level that's this Mac's output buffer (counted in `outputMs`).
+        var outputBufferMs: Double
+        var totalMs: Double { captureMs + networkMs + bufferMs + outputMs }
+    }
+
+    @MainActor var latency: Latency? {
+        guard let stats = playout?.stats, stats.playing, let output, let status else { return nil }
+        let streamRate = stats.sampleRate > 0 ? stats.sampleRate : 48_000
+        let outputBufferMs = Double(output.ioBufferFrames) / output.sampleRate * 1000
+        return Latency(
+            captureMs: Double(status.captureLatencyFrames ?? 0) / streamRate * 1000,
+            // Half the quickest recent round trip (the slower ones include the sender's main thread being busy).
+            networkMs: (roundTrips.min() ?? 0) / 2 * 1000,
+            // The buffer level counts the output buffer being filled; Output counts that already.
+            bufferMs: max(stats.bufferedMs - outputBufferMs, 0),
+            outputMs: Double(output.latencyFrames) / output.sampleRate * 1000,
+            outputBufferMs: outputBufferMs)
     }
 
     // MARK: Network thread
@@ -259,9 +291,16 @@ final class AudioStreamReceiver: @unchecked Sendable {
                         return 8 + n
                     }
                 case .status:
-                    let status = StreamWire.controlBody(StreamWire.Status.self, from: bytes)
+                    var status = StreamWire.controlBody(StreamWire.Status.self, from: bytes)
+                    let echo = status?.echo
+                    status?.echo = nil
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, status != self.status else { return }
+                        guard let self else { return }
+                        if let echo, arrival - echo >= 0, arrival - echo < 1 {
+                            self.roundTrips.append(arrival - echo)
+                            if self.roundTrips.count > 10 { self.roundTrips.removeFirst() }
+                        }
+                        guard status != self.status else { return }
                         self.status = status
                         self.onChange?()
                     }

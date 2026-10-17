@@ -224,6 +224,9 @@ struct MenuView: View {
                         .allowsHitTesting(false)
                 }
             }
+            if !model.streamSource.isEmpty {
+                StreamMeter(model: model, compact: true)
+            }
         }
     }
 

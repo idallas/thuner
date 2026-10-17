@@ -103,6 +103,25 @@ enum AudioDevices {
         }
     }
 
+    /// What the device itself adds, in frames, on top of the I/O buffer: its latency, its safety offset, and the
+    /// first stream's latency.
+    static func latencyFrames(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
+        func value(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope) -> Int {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+            var frames: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &frames) == noErr ? Int(frames) : 0
+        }
+        var total = value(id, kAudioDevicePropertyLatency, scope) + value(id, kAudioDevicePropertySafetyOffset, scope)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        var stream = AudioStreamID(0)
+        var size = UInt32(MemoryLayout<AudioStreamID>.size)
+        if AudioObjectGetPropertyData(id, &address, 0, nil, &size, &stream) == noErr, stream != 0 {
+            total += value(stream, kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal)
+        }
+        return total
+    }
+
     static func nominalSampleRate(_ id: AudioDeviceID) -> Double? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyNominalSampleRate,

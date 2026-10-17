@@ -92,7 +92,14 @@ final class DeviceInputTap {
         guard status == noErr else { throw TapError.coreAudio("start the input", status) }
         // After starting, so nothing else in this process sets it back.
         ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
+        // The newest frame in each buffer is a buffer late already; then a packet may wait for the next buffer.
+        let packet = packetizer.framesPerPacket
+        latencyFrames = AudioDevices.latencyFrames(device, scope: kAudioDevicePropertyScopeInput) + ioBufferFrames
+            + max(packet - ioBufferFrames, 0)
     }
+
+    /// Jacks to sent packet, roughly, once started.
+    private(set) var latencyFrames = 0
 
     deinit {
         if let proc {

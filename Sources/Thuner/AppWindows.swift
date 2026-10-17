@@ -24,6 +24,15 @@ final class AppWindows: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// Settings, on a particular tab.
+    func showSettings(_ pane: SettingsView.Pane) {
+        show(.settings)
+        if let tabs = windows[.settings]?.contentViewController as? NSTabViewController,
+           let index = SettingsView.Pane.allCases.firstIndex(of: pane) {
+            tabs.selectedTabViewItemIndex = index
+        }
+    }
+
     private func make(_ kind: Kind, model: AppModel) -> NSWindow {
         let window: NSWindow
         switch kind {

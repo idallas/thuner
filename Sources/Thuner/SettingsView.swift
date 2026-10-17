@@ -617,6 +617,18 @@ private struct StreamingSettings: View {
 
     var body: some View {
         Form {
+            if !model.streamSource.isEmpty {
+                Section("Stream") {
+                    if let problem = model.streamProblem {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    StreamMeter(model: model)
+                    if let details = streamDetails {
+                        Text(details).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+            }
+
             Section {
                 Toggle("Share this Mac's input with other ThUNERs", isOn: $model.streamSharing)
                 if model.streamSharing {
@@ -665,35 +677,23 @@ private struct StreamingSettings: View {
                 Text(methodHelp).font(.caption).foregroundStyle(.secondary)
             }
 
-            if !model.streamSource.isEmpty {
-                Section("Stream") {
-                    if let problem = model.streamProblem {
-                        Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    }
-                    if let status = model.streamSenderStatus, status.sharing {
-                        LabeledContent("Source", value: "\(status.source ?? "?") on \(status.host)")
-                    }
-                    if let stats = model.streamStats {
-                        LabeledContent("State", value: stats.playing ? "Playing" : "Waiting for audio")
-                        LabeledContent("Format", value: "\(Self.rate(stats.sampleRate)), 24-bit stereo")
-                        LabeledContent("Buffer", value: String(format: "%.1f ms (aiming for %.1f)", stats.bufferedMs, stats.targetMs))
-                        if stats.method == .resilient {
-                            LabeledContent("Network jitter", value: String(format: "%.1f ms", stats.jitterMs))
-                        }
-                        LabeledContent("Clock difference", value: String(format: "%+.0f ppm", stats.driftPPM))
-                        LabeledContent("Packets", value: "\(stats.received) received, \(stats.lost) lost, \(stats.late) late")
-                        LabeledContent("Dropouts", value: "\(stats.underruns)")
-                        if stats.method == .raw {
-                            LabeledContent("Clock corrections", value: "\(stats.adjustments)")
-                        }
-                    } else if model.streamProblem == nil {
-                        Text("Waiting for audio…").foregroundStyle(.secondary)
-                    }
-                }
-            }
         }
         .formStyle(.grouped)
         .onAppear { model.refreshOutputDevices() }
+    }
+
+    /// Everything else about the stream, in a line or two under the meter.
+    private var streamDetails: String? {
+        guard let stats = model.streamStats else { return nil }
+        var parts: [String] = []
+        if let status = model.streamSenderStatus, status.sharing { parts.append("\(status.source ?? "?") on \(status.host)") }
+        parts.append("\(Self.rate(stats.sampleRate)) 24-bit")
+        if stats.method == .resilient { parts.append(String(format: "jitter %.1f ms", stats.jitterMs)) }
+        parts.append(String(format: "clocks %+.0f ppm", stats.driftPPM))
+        parts.append("\(stats.received) packets, \(stats.lost) lost, \(stats.late) late")
+        parts.append("\(stats.underruns) dropouts")
+        if stats.method == .raw { parts.append("\(stats.adjustments) clock corrections") }
+        return parts.joined(separator: " · ")
     }
 
     private var methodHelp: String {

@@ -831,6 +831,12 @@ final class AppModel {
         note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
     }
 
+    /// The stream's live numbers, for the meters (read often; not observed).
+    func streamReading() -> (stats: PlayoutStats, latency: AudioStreamReceiver.Latency?)? {
+        guard let receiver = streamReceiver, let stats = receiver.stats else { return nil }
+        return (stats, receiver.latency)
+    }
+
     func refreshOutputDevices() {
         outputDevices = AudioDevices.outputDevices()
     }
