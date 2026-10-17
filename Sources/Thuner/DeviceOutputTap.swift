@@ -68,6 +68,7 @@ final class DeviceOutputTap {
 
     func start() throws {
         guard let proc else { return }
+        DeviceInputTap.setStreamUsage(device: device, proc: proc, scope: kAudioDevicePropertyScopeInput, enabled: false)
         let status = AudioDeviceStart(device, proc)
         guard status == noErr else { throw DeviceInputTap.TapError.coreAudio("start the output", status) }
         ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)

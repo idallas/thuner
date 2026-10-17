@@ -109,6 +109,12 @@ final class AppModel {
     @ObservationIgnored private let streamSender = AudioStreamSender()
     @ObservationIgnored private var streamReceiver: AudioStreamReceiver?
     @ObservationIgnored private var lastStreamLog = Date.distantPast
+    /// Since when the input has been silent (the gate closed), for pausing a shared stream.
+    @ObservationIgnored private var silentSince: Date? = Date()
+    /// How long the input stays silent before a shared stream pauses (listeners then close their outputs).
+    static let streamIdleAfter: TimeInterval = 60
+    /// Listening to a stream, but nothing's playing there, so this Mac's output is closed.
+    private(set) var streamQuiet = false
     /// Microphone permission granted (refreshed after asking).
     private(set) var micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @ObservationIgnored private var networkStarted = false
@@ -791,6 +797,7 @@ final class AppModel {
             note("Capture failed: \(error.localizedDescription)")
         }
         gate.reset()
+        silentSince = Date()
         perform(machine.audioStopped(at: Date()))
     }
 
@@ -858,8 +865,15 @@ final class AppModel {
             lastUILevelUpdate = now
             controls.refreshInputLevel()
         }
+        // Sound again after the stream paused for silence: resume at once, not after the gate's attack time, or
+        // the start of the record goes missing on the other Mac.
+        if streamSender.idle, db >= thresholdDB {
+            streamSender.idle = false
+            silentSince = nil
+        }
         switch gate.feed(levelDB: db, at: now) {
         case .opened:
+            silentSince = nil
             note("Audio detected")
             if role == .primary {
                 lastHeartbeat = now
@@ -867,6 +881,7 @@ final class AppModel {
             }
             perform(machine.audioStarted(at: now))
         case .closed:
+            silentSince = now
             note("Silence")
             if role == .primary, activePlayer == nil { peers.send(.idle, role: role.rawValue, nowPlaying: nil) }
             deferredPush = nil
@@ -892,6 +907,11 @@ final class AppModel {
         }
         checkAutoPause(at: now)
         noteRecentAudioApps(at: now)
+        if streamSharing, !streamSender.idle, let since = silentSince, now.timeIntervalSince(since) > Self.streamIdleAfter {
+            streamSender.idle = true
+        }
+        let quiet = streamReceiver?.isQuiet ?? false
+        if quiet != streamQuiet { streamQuiet = quiet }
         if let receiver = streamReceiver {
             let stats = receiver.stats
             if stats != streamStats { streamStats = stats }

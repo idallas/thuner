@@ -88,6 +88,7 @@ final class DeviceInputTap {
 
     func start() throws {
         guard let proc else { return }
+        Self.setStreamUsage(device: device, proc: proc, scope: kAudioDevicePropertyScopeOutput, enabled: false)
         let status = AudioDeviceStart(device, proc)
         guard status == noErr else { throw TapError.coreAudio("start the input", status) }
         // After starting, so nothing else in this process sets it back.
@@ -150,6 +151,32 @@ final class DeviceInputTap {
             }
         }
         return Layout(channelsPerBuffer: channels, allFloat: allFloat)
+    }
+
+    /// Turns all of an IOProc's streams in one direction on or off. An IOProc runs both directions by default, so
+    /// an output-only IOProc on an interface that also has inputs makes macOS count ThUNER as recording (the
+    /// orange mic indicator), and an input-only one keeps the outputs running for nothing.
+    static func setStreamUsage(device: AudioDeviceID, proc: AudioDeviceIOProcID, scope: AudioObjectPropertyScope, enabled: Bool) {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyIOProcStreamUsage, mScope: scope,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioHardwareIOProcStreamUsage>.size) else { return }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 8)
+        defer { raw.deallocate() }
+        raw.initializeMemory(as: UInt8.self, repeating: 0, count: Int(size))
+        let usage = raw.assumingMemoryBound(to: AudioHardwareIOProcStreamUsage.self)
+        // Which IOProc to ask about goes in the structure itself.
+        usage.pointee.mIOProc = unsafeBitCast(proc, to: UnsafeMutableRawPointer.self)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else { return }
+        let streams = Int(usage.pointee.mNumberStreams)
+        guard streams > 0, let offset = MemoryLayout<AudioHardwareIOProcStreamUsage>.offset(of: \.mStreamIsOn) else { return }
+        let flags = (raw + offset).assumingMemoryBound(to: UInt32.self)
+        for i in 0..<streams { flags[i] = enabled ? 1 : 0 }
+        let status = AudioObjectSetPropertyData(device, &address, 0, nil, size, raw)
+        if status != noErr {
+            Logger(subsystem: "com.idallas.thuner", category: "stream").error("Couldn't set IOProc stream usage (OSStatus \(status))")
+        }
     }
 
     /// The buffer and the position within its frames of one of the device's channels.

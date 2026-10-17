@@ -93,8 +93,10 @@ public enum StreamWire {
         public var captureLatencyFrames: Int?
         /// The subscribe's `sentAt`, sent straight back.
         public var echo: Double?
+        /// Sharing, but the input has been silent a while, so no audio is being sent until it isn't.
+        public var idle: Bool?
         public init(host: String, sharing: Bool, source: String? = nil, sampleRate: Double? = nil, framesPerPacket: Int? = nil,
-                    captureLatencyFrames: Int? = nil, echo: Double? = nil) {
+                    captureLatencyFrames: Int? = nil, echo: Double? = nil, idle: Bool? = nil) {
             self.host = host
             self.sharing = sharing
             self.source = source
@@ -102,6 +104,7 @@ public enum StreamWire {
             self.framesPerPacket = framesPerPacket
             self.captureLatencyFrames = captureLatencyFrames
             self.echo = echo
+            self.idle = idle
         }
     }
 

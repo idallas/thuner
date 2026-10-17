@@ -23,6 +23,15 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     var sharing = false {
         didSet { if !sharing { listeners.removeAll(); listenersChanged() } }
     }
+    /// The input has been silent a while: stop sending audio until it isn't (listeners close their outputs).
+    /// Main thread.
+    var idle = false {
+        didSet {
+            guard idle != oldValue else { return }
+            shared.withLock { $0.idle = idle }
+            log.notice("\(self.idle ? "Input silent; pausing the stream" : "Input back; resuming the stream", privacy: .public)")
+        }
+    }
     /// Decides whether an address belongs to another ThUNER (found over Bonjour). Main thread.
     var isKnownPeer: ((in_addr) -> Bool)?
     /// Called on the main queue with the host names of the Macs listening.
@@ -32,6 +41,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         var packetizer: Packetizer?
         var source: String?
         var latencyFrames = 0
+        var idle = false
         var targets: [sockaddr_in] = []
     }
     private let shared = Mutex(Shared())
@@ -81,10 +91,11 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         let fd = self.fd
         while true {
             ready.wait()
-            let (packetizer, targets) = shared.withLock { ($0.packetizer, $0.targets) }
+            let (packetizer, targets, idle) = shared.withLock { ($0.packetizer, $0.targets, $0.idle) }
             guard let packetizer else { continue }
-            // Always drain, even with nobody listening, so a new listener starts with fresh audio.
+            // Always drain, even with nobody listening (or nothing to hear), so sending resumes with fresh audio.
             while packetizer.packets.pop({ bytes in
+                guard !idle else { return }
                 for var target in targets {
                     _ = withUnsafePointer(to: &target) {
                         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -121,7 +132,8 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                 let status = StreamWire.Status(host: host, sharing: live, source: live ? input : nil,
                                                sampleRate: packetizer.map { Double($0.sampleRate) },
                                                framesPerPacket: packetizer?.framesPerPacket,
-                                               captureLatencyFrames: live ? latency : nil, echo: request.sentAt)
+                                               captureLatencyFrames: live ? latency : nil, echo: request.sentAt,
+                                               idle: live ? idle : nil)
                 UDP.send(fd, StreamWire.control(.status, status), to: sender)
             case .unsubscribe:
                 if let gone = listeners.removeValue(forKey: key) {
@@ -185,8 +197,26 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private let packets = SPSCRing(slotSize: 8 + StreamWire.maxDatagram, capacity: 512)
     /// Created at the first packet (it needs the sample rate); then only touched on the render thread.
     private var playout: Playout?
-    /// The stream rate the output was started for, read on the network thread to spot a change.
+    /// The stream rate the output was started for (0: no output), read on the network thread to spot a change
+    /// or audio coming back after the output was released.
     private let engineRate = Atomic<UInt32>(0)
+    /// When the last datagram from the sender arrived (a Double's bits).
+    private let lastAudio = Atomic<UInt64>(0)
+
+    /// Nothing has come for a couple of seconds (the sender's input went silent, or it stopped): close the output
+    /// device rather than hold it open playing silence. The next packet opens it again.
+    @MainActor private func releaseOutputIfQuiet() {
+        guard output != nil, HostClock.now() - Double(bitPattern: lastAudio.load(ordering: .relaxed)) > 2 else { return }
+        stopOutput()
+        playout = nil
+        engineRate.store(0, ordering: .relaxed)
+        log.notice("Stream quiet; released the output")
+        logAudioActivity()
+        onChange?()
+    }
+
+    /// Subscribed and the sender is sharing, but nothing's playing, so the output is closed. Main thread.
+    @MainActor var isQuiet: Bool { fd >= 0 && output == nil && error == nil && status?.sharing == true }
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     private let network = DispatchQueue(label: "com.idallas.thuner.stream-receive", qos: .userInteractive)
     private let log = Logger(subsystem: "com.idallas.thuner", category: "stream")
@@ -229,6 +259,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
     }
 
     @MainActor private func subscribe() {
+        releaseOutputIfQuiet()
         UDP.send(fd, StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method, sentAt: HostClock.now())),
                  to: sourceAddress)
     }
@@ -280,6 +311,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
                 switch StreamWire.kind(of: bytes) {
                 case .audio:
                     guard let header = StreamWire.audioHeader(bytes) else { return }
+                    lastAudio.store(arrival.bitPattern, ordering: .relaxed)
                     if header.sampleRate != engineRate.load(ordering: .relaxed) {
                         engineRate.store(header.sampleRate, ordering: .relaxed)
                         let rate = Double(header.sampleRate)
@@ -317,6 +349,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
     @MainActor private func startOutput(sampleRate: Double) {
         stopOutput()
         guard fd >= 0 else { return }
+        // No output is running, so nothing else is reading the queue: drop what piled up while there wasn't one.
+        while packets.pop({ _ in }) {}
         streamRate = sampleRate
         let deviceID: AudioDeviceID?
         if let uid = settings.outputUID {
@@ -357,6 +391,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
             self.playout = playout
             error = nil
             watch(deviceID)
+            logAudioActivity()
             log.notice("Stream output started: \(sampleRate) Hz stream to \(outputRate) Hz output, channel \(self.settings.outputChannel + 1), \(self.settings.method.rawValue, privacy: .public), margin \(self.settings.marginMs) ms, I/O buffer \(tap.ioBufferFrames) frames")
         } catch {
             self.error = "Couldn't start the output: \(error.localizedDescription)"
@@ -389,6 +424,14 @@ final class AudioStreamReceiver: @unchecked Sendable {
             if AudioObjectAddPropertyListenerBlock(object, &address, .main, restart) == noErr {
                 listeners.append((object, address, restart))
             }
+        }
+    }
+
+    /// What macOS thinks ThUNER is doing with audio (recording drives the orange indicator), once it's caught up.
+    @MainActor private func logAudioActivity() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [log] in
+            guard let activity = AudioDevices.ownAudioActivity() else { return }
+            log.notice("Core Audio says ThUNER is recording: \(activity.input), playing: \(activity.output)")
         }
     }
 

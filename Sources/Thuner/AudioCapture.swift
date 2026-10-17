@@ -167,6 +167,7 @@ final class AudioCapture: @unchecked Sendable {
         let format = input.outputFormat(forBus: 0)
         let engineChannels = Int(format.channelCount)
         guard engineChannels > 0 else { throw CaptureError.noChannels }
+
         let channels: Range<Int>
         if let mapped {
             channels = 0..<min(mapped.count, engineChannels)
@@ -211,7 +212,10 @@ final class AudioCapture: @unchecked Sendable {
                 log.error("Couldn't share the input: \(error.localizedDescription, privacy: .public)")
             }
         }
-        log.notice("Capturing from \(self.activeDeviceName ?? "default input", privacy: .public), channels \(channelLabel, privacy: .public) @ \(format.sampleRate) Hz")
+        // The engine keeps the default input's rate on its side and converts if the chosen device runs at another.
+        let deviceRate = device.flatMap { AudioDevices.nominalSampleRate($0.id) } ?? format.sampleRate
+        let rates = deviceRate == format.sampleRate ? "\(format.sampleRate) Hz" : "\(deviceRate) Hz (engine converts to \(format.sampleRate) Hz)"
+        log.notice("Capturing from \(self.activeDeviceName ?? "default input", privacy: .public), channels \(channelLabel, privacy: .public) @ \(rates, privacy: .public)")
     }
 
     /// What this Mac is playing, read straight from a process tap (no AVAudioEngine involved).

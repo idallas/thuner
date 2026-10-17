@@ -103,6 +103,27 @@ enum AudioDevices {
         }
     }
 
+    /// Whether Core Audio counts this process as recording (what drives the orange mic indicator) and as playing.
+    static func ownAudioActivity() -> (input: Bool, output: Bool)? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var pid = ProcessInfo.processInfo.processIdentifier
+        var object = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, UInt32(MemoryLayout<pid_t>.size), &pid,
+                                         &size, &object) == noErr, object != 0 else { return nil }
+        func flag(_ selector: AudioObjectPropertySelector) -> Bool {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            var value: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr && value != 0
+        }
+        return (flag(kAudioProcessPropertyIsRunningInput), flag(kAudioProcessPropertyIsRunningOutput))
+    }
+
     /// What the device itself adds, in frames, on top of the I/O buffer: its latency, its safety offset, and the
     /// first stream's latency.
     static func latencyFrames(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {

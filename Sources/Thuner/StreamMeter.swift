@@ -103,6 +103,7 @@ struct StreamMeter: View {
 
     private var summary: String {
         if let problem = model.streamProblem { return problem }
+        if model.streamQuiet { return "Nothing playing" }
         guard let stats = feed.stats, stats.playing else { return "Waiting for audio" }
         let latency = feed.latency.map { String(format: "≈ %.0f ms", $0.totalMs) } ?? String(format: "%.1f ms buffer", feed.bufferMs)
         let missing = stats.underruns + stats.lost
@@ -121,7 +122,10 @@ struct StreamMeter: View {
                     Spacer()
                 }
                 LatencyBar(latency: latency)
-            } else if let stats = feed.stats, !stats.playing {
+            } else if model.streamQuiet {
+                Text("Nothing's playing on \(model.streamSource), so the output is closed. It opens again when audio comes back.")
+                    .foregroundStyle(.secondary)
+            } else if feed.stats == nil || feed.stats?.playing == false {
                 Text("Waiting for audio…").foregroundStyle(.secondary)
             }
 
