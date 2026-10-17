@@ -28,6 +28,8 @@ public struct AudioPacketHeader: Equatable, Sendable {
     public var sampleRate: UInt32
     public var frames: Int
     public var channels: Int
+    /// Sent again because the receiver asked: its timing says nothing about the network's jitter.
+    public var resent = false
 
     public init(streamID: UInt16, sequence: UInt32, sampleTime: UInt64, sampleRate: UInt32, frames: Int, channels: Int = StreamWire.channels) {
         self.streamID = streamID
@@ -66,6 +68,15 @@ public enum StreamWire {
         case status = 3
         /// Receiver → sender: stop sending to me.
         case unsubscribe = 4
+        /// Receiver → sender: send these packets again (`Resend`).
+        case resend = 5
+        /// An audio packet sent again on request; laid out exactly like `audio`.
+        case resentAudio = 6
+    }
+
+    public struct Resend: Codable, Sendable, Equatable {
+        public var sequences: [UInt32]
+        public init(sequences: [UInt32]) { self.sequences = sequences }
     }
 
     public struct Subscribe: Codable, Sendable, Equatable {
@@ -146,18 +157,21 @@ public enum StreamWire {
 
     /// The header of an audio packet, if it's a well-formed one.
     public static func audioHeader(_ bytes: UnsafeRawBufferPointer) -> AudioPacketHeader? {
-        guard kind(of: bytes) == .audio, bytes.count >= headerSize else { return nil }
+        let kind = kind(of: bytes)
+        guard kind == .audio || kind == .resentAudio, bytes.count >= headerSize else { return nil }
         let channels = Int(bytes[6])
         guard channels == Self.channels, Int(bytes[7]) == bytesPerSample * 8 else { return nil }
         let frames = Int(UInt16(littleEndian: bytes.loadUnaligned(fromByteOffset: 24, as: UInt16.self)))
         guard frames > 0, frames <= maxFramesPerPacket, bytes.count >= headerSize + frames * channels * bytesPerSample else { return nil }
         let rate = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 20, as: UInt32.self))
         guard rate >= 8_000, rate <= 384_000 else { return nil }
-        return AudioPacketHeader(
+        var header = AudioPacketHeader(
             streamID: UInt16(littleEndian: bytes.loadUnaligned(fromByteOffset: 26, as: UInt16.self)),
             sequence: UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: 8, as: UInt32.self)),
             sampleTime: UInt64(littleEndian: bytes.loadUnaligned(fromByteOffset: 12, as: UInt64.self)),
             sampleRate: rate, frames: frames, channels: channels)
+        header.resent = kind == .resentAudio
+        return header
     }
 
     /// Decodes an audio packet's samples (interleaved) into `out`, which needs room for frames × channels floats.

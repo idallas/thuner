@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The SonoBus-style method. Each packet is written at its own place in time (its `sampleTime`), so packets that
 /// arrive out of order just fill in. The read position trails the newest audio by a target delay that follows the
@@ -53,6 +54,13 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
     private var local = PlayoutStats()
     private let published = StatsBox()
 
+    /// When lost packets are being asked for again: the round trip to the sender (a Double's bits; 0 = not
+    /// resending). After a loss the buffer then also keeps room for one packet (a loss is only noticed when the next
+    /// one arrives) plus that round trip, for 15 seconds, so resends arrive in time to be played.
+    private let resendRoundTrip = Atomic<UInt64>(0)
+    private var framesSinceLoss = Int.max / 2
+    public func setResendRoundTrip(_ seconds: Double) { resendRoundTrip.store(seconds.bitPattern, ordering: .relaxed) }
+
     /// How fast the read rate may differ from 1, either way (0.5% is about 9 cents of pitch, only while catching up).
     private let maxSlew = 0.005
     private let kp = 2e-5
@@ -82,7 +90,13 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
     /// What the buffer aims for: an output buffer (plus interpolation), the jitter, and the floor.
     var targetFrames: Double {
         let jitter = peakLateness * sampleRate * 1.3
-        return min(Double(renderFrames + 2 + minimumFrames) + jitter, sampleRate * 0.25)
+        return min(Double(renderFrames + 2 + minimumFrames) + jitter + resendAllowance, sampleRate * 0.25)
+    }
+
+    private var resendAllowance: Double {
+        let rtt = Double(bitPattern: resendRoundTrip.load(ordering: .relaxed))
+        guard rtt > 0, Double(framesSinceLoss) < 15 * sampleRate else { return 0 }
+        return Double(packetFrames) + (rtt + 0.001) * sampleRate
     }
 
     /// Where the sender is now, in its frames, if packets always took the quickest recent transit time. Measuring
@@ -111,7 +125,8 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
         packetFrames = header.frames
         let start = header.sampleTime
         let end = start + UInt64(header.frames)
-        trackJitter(transit: arrival - Double(start) / sampleRate, arrival: arrival)
+        // A resend is a round trip late by design; counting it as jitter would grow the buffer for nothing.
+        if !header.resent { trackJitter(transit: arrival - Double(start) / sampleRate, arrival: arrival) }
         if firstArrival == nil { firstArrival = arrival }
         framesSincePacket = 0
         local.received += 1
@@ -162,6 +177,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
         let nominal = outputRate > 0 ? sampleRate / outputRate : 1
         renderFrames = Int((Double(frames) * nominal).rounded(.up))
         framesSincePacket += renderFrames
+        framesSinceLoss += renderFrames
         guard streamID != nil, newestEnd > 0, Double(framesSincePacket) < sampleRate * 0.25 else {
             // Nothing coming in: stop, and line up afresh when audio returns.
             readPosition = nil
@@ -230,6 +246,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
                     } else {
                         local.lost += 1
                     }
+                    framesSinceLoss = 0
                 }
                 gain = max(gain - 1 / 32, 0)
             }

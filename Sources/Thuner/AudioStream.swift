@@ -43,7 +43,11 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         var latencyFrames = 0
         var idle = false
         var targets: [sockaddr_in] = []
+        /// Packets listeners asked for again, for the sending thread.
+        var resends: [(address: sockaddr_in, sequences: [UInt32])] = []
     }
+    /// What was sent lately, for resending. Only the sending thread touches it.
+    private let history = PacketHistory()
     private let shared = Mutex(Shared())
     private let ready = DispatchSemaphore(value: 0)
     private var listeners: [String: Listener] = [:]
@@ -91,19 +95,31 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         let fd = self.fd
         while true {
             ready.wait()
-            let (packetizer, targets, idle) = shared.withLock { ($0.packetizer, $0.targets, $0.idle) }
+            let (packetizer, targets, idle, resends) = shared.withLock { state in
+                defer { state.resends.removeAll(keepingCapacity: true) }
+                return (state.packetizer, state.targets, state.idle, state.resends)
+            }
             guard let packetizer else { continue }
             // Always drain, even with nobody listening (or nothing to hear), so sending resumes with fresh audio.
             while packetizer.packets.pop({ bytes in
                 guard !idle else { return }
-                for var target in targets {
-                    _ = withUnsafePointer(to: &target) {
-                        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                            sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                        }
-                    }
-                }
+                history.store(bytes)
+                for target in targets { Self.send(fd, bytes, to: target) }
             }) {}
+            for request in resends {
+                for sequence in request.sequences {
+                    history.resend(sequence) { Self.send(fd, $0, to: request.address) }
+                }
+            }
+        }
+    }
+
+    private static func send(_ fd: Int32, _ bytes: UnsafeRawBufferPointer, to address: sockaddr_in) {
+        var address = address
+        _ = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
     }
 
@@ -140,7 +156,13 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                     log.notice("\(gone.host, privacy: .public) stopped listening")
                     listenersChanged()
                 }
-            case .audio, .status:
+            case .resend:
+                // Only for someone already listening, and only a handful at a time.
+                guard listeners[key] != nil, let request = StreamWire.controlBody(StreamWire.Resend.self, from: bytes) else { return }
+                let sequences = Array(request.sequences.prefix(64))
+                shared.withLock { $0.resends.append((sender, sequences)) }
+                ready.signal()
+            case .audio, .resentAudio, .status:
                 break
             }
         }
@@ -179,6 +201,9 @@ final class AudioStreamReceiver: @unchecked Sendable {
         var outputUID: String?
         /// Zero-based first channel of the output pair.
         var outputChannel = 0
+        /// Testing: throw away this share of first-time audio packets, as if the network lost them
+        /// (`defaults write com.idallas.thuner streamDebugLossPercent 2`).
+        var debugLoss = UserDefaults.standard.double(forKey: "streamDebugLossPercent") / 100
         var ioBufferFrames = 128
     }
 
@@ -202,6 +227,11 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private let engineRate = Atomic<UInt32>(0)
     /// When the last datagram from the sender arrived (a Double's bits).
     private let lastAudio = Atomic<UInt64>(0)
+    /// Resilient only: asking for lost packets again. Network thread only.
+    private var resendTracker = ResendTracker()
+    private let resendCounts = Mutex((requested: 0, recovered: 0, abandoned: 0))
+    /// Lost packets asked for again, how many came back, and how many were given up on.
+    var resendStats: (requested: Int, recovered: Int, abandoned: Int) { resendCounts.withLock { $0 } }
 
     /// Nothing has come for a couple of seconds (the sender's input went silent, or it stopped): close the output
     /// device rather than hold it open playing silence. The next packet opens it again.
@@ -309,9 +339,11 @@ final class AudioStreamReceiver: @unchecked Sendable {
             buffer.withUnsafeBytes { raw in
                 let bytes = UnsafeRawBufferPointer(rebasing: raw[0..<n])
                 switch StreamWire.kind(of: bytes) {
-                case .audio:
+                case .audio, .resentAudio:
                     guard let header = StreamWire.audioHeader(bytes) else { return }
+                    if settings.debugLoss > 0, !header.resent, Double.random(in: 0..<1) < settings.debugLoss { return }
                     lastAudio.store(arrival.bitPattern, ordering: .relaxed)
+                    if settings.method == .resilient { trackLosses(header, at: arrival, socket: fd) }
                     if header.sampleRate != engineRate.load(ordering: .relaxed) {
                         engineRate.store(header.sampleRate, ordering: .relaxed)
                         let rate = Double(header.sampleRate)
@@ -331,6 +363,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
                         if let echo, arrival - echo >= 0, arrival - echo < 1 {
                             self.roundTrips.append(arrival - echo)
                             if self.roundTrips.count > 10 { self.roundTrips.removeFirst() }
+                            self.shareRoundTrip()
                         }
                         guard status != self.status else { return }
                         self.status = status
@@ -341,6 +374,22 @@ final class AudioStreamReceiver: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Resilient keeps room for resends to arrive in time, which takes the round trip.
+    @MainActor private func shareRoundTrip() {
+        guard let resilient = playout as? ResilientPlayout, let quickest = roundTrips.min() else { return }
+        resilient.setResendRoundTrip(quickest)
+    }
+
+    /// Asks the sender again for packets that went missing (and, a few ms later, again if they still haven't come).
+    private func trackLosses(_ header: AudioPacketHeader, at now: Double, socket: Int32) {
+        let missing = resendTracker.received(header.sequence, resent: header.resent, at: now) + resendTracker.due(at: now)
+        if !missing.isEmpty {
+            UDP.send(socket, StreamWire.control(.resend, StreamWire.Resend(sequences: missing)), to: sourceAddress)
+        }
+        let t = resendTracker
+        resendCounts.withLock { $0 = (t.requested, t.recovered, t.abandoned) }
     }
 
     // MARK: Output
@@ -389,6 +438,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
             try tap.start()
             output = tap
             self.playout = playout
+            shareRoundTrip()
             error = nil
             watch(deviceID)
             logAudioActivity()

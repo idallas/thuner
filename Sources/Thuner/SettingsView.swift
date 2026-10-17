@@ -692,6 +692,9 @@ private struct StreamingSettings: View {
         parts.append(String(format: "clocks %+.0f ppm", stats.driftPPM))
         parts.append("\(stats.received) packets, \(stats.lost) lost, \(stats.late) late")
         parts.append("\(stats.underruns) dropouts")
+        if let resends = model.streamResends, resends.requested > 0 {
+            parts.append("\(resends.requested) resends asked, \(resends.recovered) recovered")
+        }
         if stats.method == .raw { parts.append("\(stats.adjustments) clock corrections") }
         return parts.joined(separator: " · ")
     }
@@ -701,7 +704,7 @@ private struct StreamingSettings: View {
         case .raw:
             "Raw plays packets as they arrive, with just the safety margin on top of the output buffer. Lowest latency, but every late or lost packet is a dropout: use it when both Macs are on Ethernet."
         case .resilient:
-            "Resilient puts packets back in order, grows the buffer to cover the network's measured jitter (and shrinks it again when things calm down), follows the other Mac's clock smoothly, and fades over lost audio. A few ms on Ethernet, more on Wi-Fi."
+            "Resilient puts packets back in order, asks again for lost ones, grows the buffer to cover the network's measured jitter (and room for resends after a loss; it shrinks again when things calm down), follows the other Mac's clock smoothly, and fades over audio that still doesn't arrive. A few ms on Ethernet, more on Wi-Fi."
         }
     }
 

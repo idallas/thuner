@@ -90,6 +90,8 @@ struct StreamSimulation {
     /// Occasional big delay spikes (Wi-Fi): probability per packet, and size.
     var spikeRate = 0.0
     var spike = 0.0
+    /// Ask for lost packets again (as the receiver does for resilient), with this round trip; nil: don't.
+    var resendRoundTrip: Double?
     var seconds = 60.0
 
     struct Result {
@@ -108,6 +110,8 @@ struct StreamSimulation {
         var nextRender = 0.0
         var sequence: UInt32 = 0
         var inFlight: [(arrival: Double, header: AudioPacketHeader, samples: [Float])] = []
+        var sent: [UInt32: (header: AudioPacketHeader, samples: [Float])] = [:]
+        var tracker = ResendTracker()
         let most = max(renderFrames, renderFramesChange?.frames ?? 0)
         var left = [Float](repeating: 0, count: most)
         var right = [Float](repeating: 0, count: most)
@@ -129,6 +133,7 @@ struct StreamSimulation {
                 let header = AudioPacketHeader(streamID: 1, sequence: sequence, sampleTime: UInt64(sequence) * UInt64(packetFrames),
                                                sampleRate: UInt32(senderRate), frames: packetFrames)
                 sequence += 1
+                if resendRoundTrip != nil { sent[header.sequence] = (header, samples) }
                 if rng.unit() >= lossRate {
                     var delay = latency + rng.unit() * jitter
                     if rng.unit() < spikeRate { delay += spike }
@@ -141,6 +146,17 @@ struct StreamSimulation {
                 while let first = inFlight.first, first.arrival <= nextRender {
                     first.samples.withUnsafeBufferPointer { playout.receive(first.header, samples: $0.baseAddress!, arrival: first.arrival) }
                     inFlight.removeFirst()
+                    if let rtt = resendRoundTrip {
+                        let asked = tracker.received(first.header.sequence, resent: first.header.resent, at: first.arrival)
+                            + tracker.due(at: first.arrival)
+                        for s in asked {
+                            // The resend can be lost too.
+                            guard var copy = sent[s], rng.unit() >= lossRate else { continue }
+                            copy.header.resent = true
+                            inFlight.append((first.arrival + rtt, copy.header, copy.samples))
+                        }
+                        inFlight.sort { $0.arrival < $1.arrival }
+                    }
                 }
                 if let change = renderFramesChange, nextRender >= change.at, renderFrames != change.frames {
                     renderFrames = change.frames
@@ -312,3 +328,78 @@ struct SplitMix {
         #expect(packetizer.discontinuities == 1)
     }
 }
+
+@Suite struct ResendTests {
+    @Test func asksForGapsOnceThenRetriesThenGivesUp() {
+        var tracker = ResendTracker(retryInterval: 0.004, giveUpAfter: 0.02, maxAttempts: 3)
+        #expect(tracker.received(10, resent: false, at: 0).isEmpty)
+        #expect(tracker.received(13, resent: false, at: 0.001) == [11, 12])
+        // 12 comes back; 11 doesn't.
+        #expect(tracker.received(12, resent: true, at: 0.002).isEmpty)
+        #expect(tracker.recovered == 1)
+        #expect(tracker.due(at: 0.003).isEmpty)
+        #expect(tracker.due(at: 0.0055) == [11])
+        #expect(tracker.due(at: 0.0096) == [11])
+        #expect(tracker.due(at: 0.014).isEmpty)  // three attempts made: given up
+        #expect(tracker.abandoned == 1)
+        #expect(tracker.waiting == 0)
+    }
+
+    @Test func aReorderedOriginalCancelsTheRequest() {
+        var tracker = ResendTracker()
+        _ = tracker.received(1, resent: false, at: 0)
+        #expect(tracker.received(3, resent: false, at: 0) == [2])
+        _ = tracker.received(2, resent: false, at: 0.001)
+        #expect(tracker.waiting == 0)
+        #expect(tracker.recovered == 0)
+    }
+
+    @Test func aBigJumpIsANewStreamNotLoss() {
+        var tracker = ResendTracker()
+        _ = tracker.received(5, resent: false, at: 0)
+        #expect(tracker.received(5_000, resent: false, at: 0.01).isEmpty)
+        // The sender started over, lower down.
+        #expect(tracker.received(3, resent: false, at: 0.02).isEmpty)
+        #expect(tracker.received(5, resent: false, at: 0.03) == [4])
+
+        var wrapping = ResendTracker()
+        _ = wrapping.received(UInt32.max - 1, resent: false, at: 0)
+        #expect(wrapping.received(1, resent: false, at: 0.01) == [UInt32.max, 0])
+    }
+
+    @Test func historyResendsMarkedCopies() {
+        let history = PacketHistory(capacity: 8)
+        let samples = [Float](repeating: 0.25, count: 256)
+        var datagram = [UInt8](repeating: 0, count: StreamWire.maxDatagram)
+        for seq in UInt32(0)..<10 {
+            let size = datagram.withUnsafeMutableBytes {
+                StreamWire.writeAudio(AudioPacketHeader(streamID: 1, sequence: seq, sampleTime: UInt64(seq) * 128, sampleRate: 48_000, frames: 128),
+                                      samples: samples, to: $0.baseAddress!)
+            }
+            datagram.withUnsafeBytes { history.store(UnsafeRawBufferPointer(rebasing: $0[0..<size])) }
+        }
+        var got: AudioPacketHeader?
+        history.resend(9) { got = StreamWire.audioHeader($0) }
+        #expect(got?.sequence == 9 && got?.resent == true)
+        var old = false
+        history.resend(1) { _ in old = true }  // overwritten by 9
+        #expect(!old)
+    }
+
+    @Test func resendingRecoversMostLosses() {
+        let lossy = StreamSimulation(driftPPM: 20, jitter: 0.001, lossRate: 0.02, seconds: 30)
+        var withResend = lossy
+        withResend.resendRoundTrip = 0.001
+        let plain = lossy.run(ResilientPlayout(minimumFrames: 64))
+        let playout = ResilientPlayout(minimumFrames: 64)
+        playout.setResendRoundTrip(0.001)
+        let recovered = withResend.run(playout)
+        let before = plain.stats.lost + plain.stats.underruns
+        let after = recovered.stats.lost + recovered.stats.underruns
+        #expect(before > 150)
+        #expect(after * 20 < before, "\(before) → \(after)")
+        // It keeps room for one packet and the round trip (plus a margin), not more: resends don't count as jitter.
+        #expect(recovered.stats.targetMs < plain.stats.targetMs + 2.7 + 2 + 0.5, "\(plain.stats.targetMs) → \(recovered.stats.targetMs)")
+    }
+}
+

@@ -838,6 +838,12 @@ final class AppModel {
         note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
     }
 
+    /// Lost packets asked for again, how many came back in time, and how many were given up on (resilient only).
+    var streamResends: (requested: Int, recovered: Int, abandoned: Int)? {
+        guard streamMethod == .resilient else { return nil }
+        return streamReceiver?.resendStats
+    }
+
     /// The stream's live numbers, for the meters (read often; not observed).
     func streamReading() -> (stats: PlayoutStats, latency: AudioStreamReceiver.Latency?)? {
         guard let receiver = streamReceiver, let stats = receiver.stats else { return nil }
