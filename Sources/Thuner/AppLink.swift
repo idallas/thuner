@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Network
 import os
@@ -6,8 +7,9 @@ import os
 /// any knob, fader or pad, and keeps their rings, lights and screen text in sync with its real state.
 /// https://twistcommando.com/developers/
 ///
-/// Newline-delimited JSON over TCP to 127.0.0.1:9034. Twist Commando may start after ThUNER, so a failed or
-/// dropped connection is retried every few seconds.
+/// Newline-delimited JSON over TCP to 127.0.0.1:9034. Nothing is tried unless Twist Commando is running: ThUNER
+/// connects when it's already open, or when macOS says it launched (most Macs never have it, and shouldn't see a
+/// thing). While it's running but not answering yet (just launched), attempts back off from 4 s to a minute.
 @MainActor
 final class AppLinkClient {
     enum Kind: String { case level, steps, toggle, button }
@@ -50,9 +52,14 @@ final class AppLinkClient {
     private var buffer = Data()
     private var enabled = false
     private var retry: DispatchWorkItem?
-    /// Seconds before the next attempt: 4 at first, doubling to a minute while Twist Commando isn't there (on a
-    /// Mac without it, every attempt fills the system log with connection messages).
+    /// Seconds before the next attempt while Twist Commando is running but not answering: 4, doubling to a minute.
     private var retryDelay = 4.0
+    private var launchObservers: [NSObjectProtocol] = []
+    static let bundlePrefix = "com.twistcommando."
+
+    private static var isRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier?.hasPrefix(bundlePrefix) == true }
+    }
     private let log = Logger(subsystem: "com.idallas.thuner", category: "applink")
 
     init(controls: [Control]) {
@@ -62,11 +69,25 @@ final class AppLinkClient {
     func start() {
         guard !enabled else { return }
         enabled = true
-        connect()
+        let center = NSWorkspace.shared.notificationCenter
+        launchObservers = [
+            center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
+                guard Self.isTwistCommando(note) else { return }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.retryDelay = 4
+                    // Give it a moment to open its port.
+                    self.scheduleRetry(after: 1)
+                }
+            },
+        ]
+        if Self.isRunning { connect() }
     }
 
     func stop() {
         enabled = false
+        for observer in launchObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        launchObservers = []
         retry?.cancel()
         connection?.cancel()
         connection = nil
@@ -121,7 +142,7 @@ final class AppLinkClient {
             send(["type": "hello", "app": Bundle.main.bundleIdentifier ?? "com.idallas.thuner", "name": "ThUNER", "protocol": 2])
             receive(on: connection)
         case .waiting, .failed, .cancelled:
-            // Not running (connection refused) or gone: try again in a few seconds.
+            // Gone, or not listening yet: try again only if it's still running (otherwise its launch will say).
             connection.stateUpdateHandler = nil
             connection.cancel()
             self.connection = nil
@@ -133,15 +154,20 @@ final class AppLinkClient {
         }
     }
 
-    private func scheduleRetry() {
+    private static func isTwistCommando(_ note: Notification) -> Bool {
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        return app?.bundleIdentifier?.hasPrefix(bundlePrefix) == true
+    }
+
+    private func scheduleRetry(after delay: Double? = nil) {
         retry?.cancel()
-        guard enabled else { return }
+        guard enabled, delay != nil || Self.isRunning else { return }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated { self?.connect() }
         }
         retry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay, execute: work)
-        retryDelay = min(retryDelay * 2, 60)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (delay ?? retryDelay), execute: work)
+        if delay == nil { retryDelay = min(retryDelay * 2, 60) }
     }
 
     private func setConnected(_ version: String?) {

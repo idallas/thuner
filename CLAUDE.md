@@ -92,6 +92,7 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 
 ## Controls and the API
 
+- App Link only connects while Twist Commando is running (bundle ID prefix `com.twistcommando.`): at launch if it's open, or when NSWorkspace reports it launching; no polling on Macs without it.
 - App Link meters (Twist Commando protocol 2, `"meters": true` in its welcome): controls with `meterChannels` (Input Level, Stream Source Level, Stream Level) are offered as stereo `meter` controls and get peak-dBFS `meter` messages about 20 times a second while Twist Commando subscribes (`meterSubscribe`). Older Twist Commando versions get them as read-only levels, as does the HTTP API. One 20 Hz poll in `AppModel` feeds both the on-screen stream meters and App Link.
 - `ControlSurface` defines ThUNER's controls once (id, name, kind level/toggle/button, group, state, what turning/pressing does). Adapters expose them: Twist Commando's App Link (`AppLinkClient`, TCP 127.0.0.1:9034) and ThUNER's HTTP API (`WebDisplayServer`). Add a control in `ControlSurface` and every adapter gets it.
 - HTTP server on port 47480 (all interfaces): `/` web display, `/now.json`, `GET /api`, `GET /api/controls`, `GET /api/events` (SSE; `?levels=1` adds the input meter), `POST /api/controls/<id>` with `{"value": 0-1}`, `{"press": true}` or `{"on": bool}`.
