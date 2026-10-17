@@ -55,7 +55,7 @@ final class AppLinkClient {
     /// Seconds before the next attempt while Twist Commando is running but not answering: 4, doubling to a minute.
     private var retryDelay = 4.0
     private var launchObservers: [NSObjectProtocol] = []
-    static let bundlePrefix = "com.twistcommando."
+    nonisolated static let bundlePrefix = "com.twistcommando."
 
     private static var isRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier?.hasPrefix(bundlePrefix) == true }
@@ -154,7 +154,7 @@ final class AppLinkClient {
         }
     }
 
-    private static func isTwistCommando(_ note: Notification) -> Bool {
+    nonisolated private static func isTwistCommando(_ note: Notification) -> Bool {
         let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         return app?.bundleIdentifier?.hasPrefix(bundlePrefix) == true
     }

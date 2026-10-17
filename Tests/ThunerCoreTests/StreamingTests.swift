@@ -192,11 +192,16 @@ struct SplitMix {
         // Playback starts partway into the tone: find where, then compare sample for sample (24-bit
         // quantization aside).
         let start = result.output.firstIndex { $0 != 0 }!
-        let offset = (0..<1_000).min { a, b in
-            (0..<64).reduce(0) { $0 + abs(result.output[start + $1] - result.input[a + $1]) }
-                < (0..<64).reduce(0) { $0 + abs(result.output[start + $1] - result.input[b + $1]) }
-        }!
-        let worst = (0..<10_000).map { abs(result.output[start + $0] - result.input[offset + $0]) }.max()!
+        // (Plain loops: CI's compiler gave up type-checking this as one expression.)
+        func mismatch(at shift: Int, over count: Int) -> Float {
+            var total: Float = 0
+            for i in 0..<count { total += abs(result.output[start + i] - result.input[shift + i]) }
+            return total
+        }
+        var offset = 0
+        for shift in 1..<1_000 where mismatch(at: shift, over: 64) < mismatch(at: offset, over: 64) { offset = shift }
+        var worst: Float = 0
+        for i in 0..<10_000 { worst = max(worst, abs(result.output[start + i] - result.input[offset + i])) }
         #expect(worst < 1e-6)
     }
 
