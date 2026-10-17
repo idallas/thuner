@@ -30,7 +30,7 @@ final class DeviceInputTap {
     /// `firstChannel` is zero-based across all of the device's input channels; a mono device (or a last odd
     /// channel) is sent as both sides.
     init(device: AudioDeviceID, firstChannel: Int, ioBufferFrames: Int, packetizer makePacketizer: (Double) -> Packetizer,
-         ready: @escaping () -> Void) throws {
+         levels: PeakLevels, ready: @escaping () -> Void) throws {
         self.device = device
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyNominalSampleRate,
@@ -68,6 +68,7 @@ final class DeviceInputTap {
                 l[i] = ls[i * lStride + leftAt.offset]
                 r[i] = rs[i * rStride + rightAt.offset]
             }
+            levels.record(left: l, right: r, frames: frames)
             let time = inputTime.pointee.mFlags.contains(.sampleTimeValid) ? inputTime.pointee.mSampleTime : nil
             if packetizer.append(left: l, right: r, frames: frames, inputTime: time) > 0 { ready() }
         }

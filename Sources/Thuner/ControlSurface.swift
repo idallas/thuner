@@ -34,6 +34,8 @@ final class ControlSurface {
         .init(id: "inputLevel", name: "Input Level", kind: .level, group: "Listening", readOnly: true),
         .init(id: "identify", name: "Identify Now", kind: .button, group: "Listening"),
         .init(id: "listenHere", name: "Listen Here", kind: .button, group: "Listening"),
+        .init(id: "streamSourceLevel", name: "Stream Source Level", kind: .level, group: "Streaming", readOnly: true),
+        .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true),
         .init(id: "nowPlaying", name: "Now Playing", kind: .level, group: "Now Playing", readOnly: true),
         .init(id: "radio", name: "Radio Mode", kind: .toggle, group: "Now Playing"),
         .init(id: "brightness", name: "Tuneshine Brightness", kind: .level, group: "Display"),
@@ -122,6 +124,7 @@ final class ControlSurface {
             update("nowPlaying", State(value: 0, text: model.pausedManually ? "Paused" : "Nothing playing"))
         }
         refreshInputLevel()
+        refreshStreamLevels()
     }
 
     /// The input level as a meter, from −80 dB to full scale. Called on every level update (about 10/s).
@@ -129,6 +132,18 @@ final class ControlSurface {
         let off = model.micSuspended
         let db = off ? -80 : max(model.levelDB, -80)
         update("inputLevel", State(value: ((db + 80) / 80 * 50).rounded() / 50, text: off ? "Off" : "\(Int(db)) dB"))
+    }
+
+    /// Both sides of the stream being listened to: the other Mac's input as it measured it, and what plays here.
+    /// Louder channel, -60…0 dB.
+    func refreshStreamLevels() {
+        func state(_ levels: AppModel.Stereo?) -> State {
+            guard let levels, !model.streamSource.isEmpty else { return State(value: 0, text: "Off") }
+            let db = max(levels.left, levels.right, -60)
+            return State(value: ((db + 60) / 60 * 50).rounded() / 50, text: db <= -60 ? "-∞" : "\(Int(db)) dB")
+        }
+        update("streamSourceLevel", state(model.streamSourceLevels))
+        update("streamLevel", state(model.streamSource.isEmpty ? nil : model.streamPlayedLevels))
     }
 
     private func update(_ id: String, _ state: State) {

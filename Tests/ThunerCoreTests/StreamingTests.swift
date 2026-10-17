@@ -403,3 +403,16 @@ struct SplitMix {
     }
 }
 
+
+@Suite struct PeakLevelTests {
+    @Test func keepsTheLoudestUntilTaken() {
+        let levels = PeakLevels()
+        let quiet = [Float](repeating: 0.1, count: 64), loud = [Float](repeating: -0.5, count: 64), silent = [Float](repeating: 0, count: 64)
+        levels.record(left: loud, right: quiet, frames: 64)
+        levels.record(left: quiet, right: silent, frames: 64)
+        let first = levels.take()
+        #expect(abs(first.left - -6.02) < 0.01)
+        #expect(abs(first.right - -20) < 0.01)
+        #expect(levels.take() == (left: -160, right: -160))
+    }
+}

@@ -72,6 +72,18 @@ public enum StreamWire {
         case resend = 5
         /// An audio packet sent again on request; laid out exactly like `audio`.
         case resentAudio = 6
+        /// Sender → receiver, about 20 times a second: the input's peak levels (`Levels`), even while idle.
+        case levels = 7
+    }
+
+    public struct Levels: Codable, Sendable, Equatable {
+        /// Peak dBFS since the last message.
+        public var left: Double
+        public var right: Double
+        public init(left: Double, right: Double) {
+            self.left = left
+            self.right = right
+        }
     }
 
     public struct Resend: Codable, Sendable, Equatable {

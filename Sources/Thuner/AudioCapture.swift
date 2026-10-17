@@ -6,6 +6,8 @@ import os
 /// Where shared audio goes: each capture start hands it a fresh packetizer (nil on stop), and the capture thread
 /// calls `packetsReady` whenever it finishes packets.
 protocol StreamSink: AnyObject, Sendable {
+    /// Where the shared input's peak levels go.
+    var levels: PeakLevels { get }
     /// `latencyFrames`: from the input's jacks to a sent packet, roughly.
     func attach(_ packetizer: Packetizer?, source: String?, latencyFrames: Int)
     func packetsReady()
@@ -203,7 +205,7 @@ final class AudioCapture: @unchecked Sendable {
                 let tap = try DeviceInputTap(device: device.id, firstChannel: config.firstChannel,
                                              ioBufferFrames: config.streamIOBufferFrames,
                                              packetizer: { Packetizer(framesPerPacket: frames, sampleRate: $0) },
-                                             ready: { streamSink.packetsReady() })
+                                             levels: streamSink.levels, ready: { streamSink.packetsReady() })
                 try tap.start()
                 inputTap = tap
                 streamSink.attach(tap.packetizer, source: device.name, latencyFrames: tap.latencyFrames)
@@ -241,6 +243,7 @@ final class AudioCapture: @unchecked Sendable {
         try tap.start { [weak self] buffer in
             if let streamPacketizer, let streamSink, let data = buffer.floatChannelData {
                 let right = buffer.format.channelCount > 1 ? data[1] : data[0]
+                streamSink.levels.record(left: data[0], right: right, frames: Int(buffer.frameLength))
                 if streamPacketizer.append(left: data[0], right: right, frames: Int(buffer.frameLength)) > 0 { streamSink.packetsReady() }
             }
             self?.process(buffer, channels: channels, mono: mono, target: target, converter: converter)

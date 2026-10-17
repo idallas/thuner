@@ -95,10 +95,25 @@ struct StreamMeter: View {
                 .font(.system(size: 11))
                 BufferBar(feed: feed, scaleMs: scaleMs)
                     .frame(height: 6)
+                HStack(spacing: 10) {
+                    levelPair(sourceName, model.streamSourceLevels)
+                    levelPair("Here", model.streamPlayedLevels)
+                }
             }
         }
         .allowsHitTesting(false)
         .help(model.streamProblem ?? "Listening to \(model.streamSource)'s stream. Details in Settings → Streaming.")
+    }
+
+    private var sourceName: String {
+        model.streamSource == AppModel.streamThisMac ? "Input" : model.streamSource
+    }
+
+    private func levelPair(_ name: String, _ levels: AppModel.Stereo?) -> some View {
+        HStack(spacing: 4) {
+            Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).frame(width: 34, alignment: .leading)
+            StereoLevelMeter(levels: levels).frame(height: 7)
+        }
     }
 
     private var summary: String {
@@ -129,6 +144,16 @@ struct StreamMeter: View {
                 Text("Waiting for audio…").foregroundStyle(.secondary)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Levels").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("peak, -60 to 0 dB").font(.caption2).foregroundStyle(.secondary)
+                }
+                levelRow("At \(sourceName)", model.streamSourceLevels)
+                levelRow("Here", model.streamPlayedLevels)
+            }
+
             if let stats = feed.stats, stats.playing {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -152,6 +177,17 @@ struct StreamMeter: View {
         }
         .padding(.vertical, 4)
     }
+
+    private func levelRow(_ name: String, _ levels: AppModel.Stereo?) -> some View {
+        HStack(spacing: 8) {
+            Text(name).font(.caption).frame(width: 80, alignment: .leading).lineLimit(1)
+            StereoLevelMeter(levels: levels).frame(height: 10)
+            Text(levels.map { Self.db(max($0.left, $0.right)) } ?? "—")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    private static func db(_ value: Double) -> String { value <= -60 ? "-∞" : "\(Int(value.rounded())) dB" }
 
     private var legend: some View {
         HStack(spacing: 10) {
@@ -303,5 +339,36 @@ struct LatencyBar: View {
             .font(.caption)
         }
         .help("Capture: the other Mac's input and packet. Network: half the round trip. Buffer: waiting to play. Output: this Mac's output buffer and device. Estimates from what the devices report.")
+    }
+}
+
+/// Left and right peak level, -60…0 dBFS: green, yellow above -12, red above -3. Nil draws an empty meter.
+struct StereoLevelMeter: View {
+    let levels: AppModel.Stereo?
+
+    var body: some View {
+        VStack(spacing: 1) {
+            bar(levels?.left)
+            bar(levels?.right)
+        }
+    }
+
+    private func bar(_ db: Double?) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.quaternary)
+                if let db {
+                    let f = min(max((db + 60) / 60, 0), 1)
+                    Rectangle().fill(LinearGradient(stops: [
+                        .init(color: .green, location: 0), .init(color: .green, location: 0.79),
+                        .init(color: .yellow, location: 0.8), .init(color: .yellow, location: 0.94),
+                        .init(color: .red, location: 0.95), .init(color: .red, location: 1),
+                    ], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: geo.size.width)
+                    .mask(alignment: .leading) { Rectangle().frame(width: geo.size.width * f) }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 1))
+        }
     }
 }

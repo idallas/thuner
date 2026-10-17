@@ -109,6 +109,49 @@ final class AppModel {
     @ObservationIgnored private let streamSender = AudioStreamSender()
     @ObservationIgnored private var streamReceiver: AudioStreamReceiver?
     @ObservationIgnored private var lastStreamLog = Date.distantPast
+
+    /// Peak levels on both sides of the stream while listening (dBFS, with meter falloff), for the meters and
+    /// Twist Commando. `source` is the other Mac's input as it measured it; nil if it hasn't said lately.
+    struct Stereo: Equatable {
+        var left: Double
+        var right: Double
+        static let silent = Stereo(left: -160, right: -160)
+    }
+    private(set) var streamSourceLevels: Stereo?
+    private(set) var streamPlayedLevels = Stereo.silent
+    @ObservationIgnored private var streamLevelTimer: Timer?
+
+    private func startStreamLevels() {
+        guard streamLevelTimer == nil else { return }
+        streamLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollStreamLevels() }
+        }
+    }
+
+    private func stopStreamLevels() {
+        streamLevelTimer?.invalidate()
+        streamLevelTimer = nil
+        streamSourceLevels = nil
+        streamPlayedLevels = .silent
+        controls.refreshStreamLevels()
+    }
+
+    private func pollStreamLevels() {
+        guard let receiver = streamReceiver else { return stopStreamLevels() }
+        let levels = receiver.takeLevels()
+        // Peaks jump up and fall back 15 dB a second, like a hardware meter.
+        func fall(_ old: Double, _ new: Double) -> Double { max(new, old - 1.5, -160) }
+        if let source = levels.source {
+            let old = streamSourceLevels ?? .silent
+            streamSourceLevels = Stereo(left: fall(old.left, source.left), right: fall(old.right, source.right))
+        } else if streamSourceLevels != nil {
+            streamSourceLevels = nil
+        }
+        let played = Stereo(left: fall(streamPlayedLevels.left, levels.received.left),
+                            right: fall(streamPlayedLevels.right, levels.received.right))
+        if played != streamPlayedLevels { streamPlayedLevels = played }
+        controls.refreshStreamLevels()
+    }
     /// Since when the input has been silent (the gate closed), for pausing a shared stream.
     @ObservationIgnored private var silentSince: Date? = Date()
     /// How long the input stays silent before a shared stream pauses (listeners then close their outputs).
@@ -257,10 +300,12 @@ final class AppModel {
     }
 
     private(set) var remote: RemoteNowPlaying?
-    /// Listening paused by hand, from the menu.
+    /// Listening paused by hand (menu, Listening control or API). Saved, so it lasts through relaunches and
+    /// updates: only resuming by hand ends it; the auto-pause wake signals never do.
     var pausedManually = false {
         didSet {
             guard pausedManually != oldValue else { return }
+            save(pausedManually, "pausedManually")
             note(pausedManually ? "Listening paused" : "Listening resumed")
             updateCapture()
         }
@@ -561,6 +606,10 @@ final class AppModel {
         webDisplayLocalOnly = d.bool(forKey: "webDisplayLocalOnly")
         twistCommandoEnabled = d.object(forKey: "twistCommandoEnabled") as? Bool ?? true
         micEnabled = d.object(forKey: "micEnabled") as? Bool ?? true
+        let paused = d.bool(forKey: "pausedManually")
+        pausedManually = paused
+        // Paused when it quit: start with the mic off rather than turn it on for a moment at launch.
+        micSuspended = paused
         systemAudioMode = SystemAudioTap.Mode(rawValue: d.string(forKey: "systemAudioMode") ?? "") ?? .all
         systemAudioApps = d.data(forKey: "systemAudioApps").flatMap { try? JSONDecoder().decode([AudioDevices.AudioApp].self, from: $0) } ?? []
         recentAudioApps = d.data(forKey: "recentAudioApps").flatMap { try? JSONDecoder().decode([AudioDevices.AudioApp].self, from: $0) } ?? []
@@ -807,6 +856,7 @@ final class AppModel {
     private func applyStreamReceiver() {
         streamReceiver?.stop()
         streamReceiver = nil
+        stopStreamLevels()
         streamStats = nil
         streamSenderStatus = nil
         streamProblem = nil
@@ -834,6 +884,7 @@ final class AppModel {
         }
         streamReceiver = receiver
         receiver.start()
+        startStreamLevels()
         streamProblem = receiver.error
         note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
     }

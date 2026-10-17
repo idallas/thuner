@@ -48,6 +48,8 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     }
     /// What was sent lately, for resending. Only the sending thread touches it.
     private let history = PacketHistory()
+    let levels = PeakLevels()
+    private var lastLevels = 0.0
     private let shared = Mutex(Shared())
     private let ready = DispatchSemaphore(value: 0)
     private var listeners: [String: Listener] = [:]
@@ -111,6 +113,14 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                     history.resend(sequence) { Self.send(fd, $0, to: request.address) }
                 }
             }
+            // The input's levels for meters on the other side, idle or not (the capture keeps waking this thread).
+            let now = HostClock.now()
+            if now - lastLevels >= 0.05, !targets.isEmpty {
+                lastLevels = now
+                let peak = levels.take()
+                let message = StreamWire.control(.levels, StreamWire.Levels(left: peak.left.rounded(), right: peak.right.rounded()))
+                message.withUnsafeBytes { bytes in for target in targets { Self.send(fd, bytes, to: target) } }
+            }
         }
     }
 
@@ -162,7 +172,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                 let sequences = Array(request.sequences.prefix(64))
                 shared.withLock { $0.resends.append((sender, sequences)) }
                 ready.signal()
-            case .audio, .resentAudio, .status:
+            case .audio, .resentAudio, .status, .levels:
                 break
             }
         }
@@ -227,6 +237,29 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private let engineRate = Atomic<UInt32>(0)
     /// When the last datagram from the sender arrived (a Double's bits).
     private let lastAudio = Atomic<UInt64>(0)
+    /// Peak levels for meters: the sender's input as it measured it (the loudest since last read, and when it last
+    /// said), and what this Mac played.
+    private let sourceLevels = Mutex<(levels: (left: Double, right: Double), at: Double)?>(nil)
+    private let received = PeakLevels()
+
+    struct Levels {
+        /// Nil when the sender hasn't said lately (it's gone, or an older ThUNER).
+        var source: (left: Double, right: Double)?
+        var received: (left: Double, right: Double)
+    }
+
+    /// Peaks since the last call, in dBFS.
+    func takeLevels() -> Levels {
+        let source = sourceLevels.withLock { current -> (left: Double, right: Double)? in
+            defer { current = current.map { ((-160, -160), $0.at) } }
+            guard let current, HostClock.now() - current.at < 1 else { return nil }
+            return current.levels
+        }
+        // Nothing playing: the output's closed, so nothing's recording peaks.
+        let played = output == nil ? (left: -160.0, right: -160.0) : received.take()
+        return Levels(source: source, received: played)
+    }
+
     /// Resilient only: asking for lost packets again. Network thread only.
     private var resendTracker = ResendTracker()
     private let resendCounts = Mutex((requested: 0, recovered: 0, abandoned: 0))
@@ -354,6 +387,12 @@ final class AudioStreamReceiver: @unchecked Sendable {
                         (slot + 8).copyMemory(from: bytes.baseAddress!, byteCount: n)
                         return 8 + n
                     }
+                case .levels:
+                    guard let levels = StreamWire.controlBody(StreamWire.Levels.self, from: bytes) else { return }
+                    sourceLevels.withLock { current in
+                        let previous = current?.levels
+                        current = ((max(levels.left, previous?.left ?? -160), max(levels.right, previous?.right ?? -160)), arrival)
+                    }
                 case .status:
                     var status = StreamWire.controlBody(StreamWire.Status.self, from: bytes)
                     let echo = status?.echo
@@ -422,6 +461,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
         }
         let scratch = Scratch()
         let packets = self.packets
+        let received = self.received
         do {
             let tap = try DeviceOutputTap(device: deviceID, firstChannel: settings.outputChannel,
                                           ioBufferFrames: settings.ioBufferFrames) { left, right, frames in
@@ -434,6 +474,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
                     playout.receive(header, samples: scratch.samples, arrival: arrival)
                 }) {}
                 playout.render(left: left, right: right, frames: frames, now: now)
+                received.record(left: left, right: right, frames: frames)
             }
             try tap.start()
             output = tap
