@@ -87,7 +87,7 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 - Last.fm API key: never in source. `build-app.sh` embeds the one saved in this Mac's Keychain (service `com.idallas.thuner`, account `lastfm-credentials`) as `LastFMAPIKey`/`LastFMSharedSecret`; builds without one ask for a key in Settings → Scrobbling.
 - Website: static pages (overview + `thuner/` with the appcast and release notes) in a separate private repo, `idallas/software-site`, checked out at `WEBSITE_DIR` (its `software/` folder). Deployed with rsync by `Scripts/deploy-website.sh` to `DEPLOY_TARGET` (never deletes remote files). Preview with that repo's `website` launch config (python http.server on 8765).
 - Bundle ID `com.idallas.thuner` (override with `BUNDLE_ID`). ShazamKit needs a paid developer team with the ShazamKit App Service enabled for the App ID, or matches fail with ShazamCore error 102; free personal teams can't enable App Services.
-- Settings live in UserDefaults (`inputDeviceUID`, `firstChannel`, `thresholdDB`, `role`, `idleImageMinutes`), so they can be set over SSH on a headless Mac with `defaults write com.idallas.thuner …`.
+- Settings live in UserDefaults (`inputDeviceUID`, `firstChannel`, `thresholdDB`, `role`, `idleImageMinutes`, `inputNames` keyed `uid#firstChannel`), so they can be set over SSH on a headless Mac with `defaults write com.idallas.thuner …`.
 - Logs: `/usr/bin/log stream --predicate 'subsystem == "com.idallas.thuner"'`.
 - The turntable Mac is typically a headless Mac mini, managed over SSH.
 

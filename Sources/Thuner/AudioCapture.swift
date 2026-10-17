@@ -66,6 +66,8 @@ final class AudioCapture: @unchecked Sendable {
         /// is lower latency, at a little more CPU). Nil when not sharing.
         var streamFrames: Int?
         var streamIOBufferFrames = 128
+        /// The input's given name ("Turntable"), shown to listening Macs instead of the device's.
+        var sourceName: String?
     }
 
     enum CaptureError: LocalizedError {
@@ -186,7 +188,7 @@ final class AudioCapture: @unchecked Sendable {
         ring.clear()
         log.notice("Capturing from \(device.name, privacy: .public), channels \(tap.channelLabel, privacy: .public) @ \(rate) Hz, I/O buffer \(tap.ioBufferFrames) frames")
         if let sharing, let packetizer = tap.packetizer {
-            sharing.attach(packetizer, source: device.name, latencyFrames: tap.latencyFrames)
+            sharing.attach(packetizer, source: config.sourceName ?? device.name, latencyFrames: tap.latencyFrames)
             log.notice("Sharing \(device.name, privacy: .public)")
         }
     }

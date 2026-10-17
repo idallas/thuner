@@ -22,6 +22,9 @@ final class AppWindows: NSObject, NSWindowDelegate {
         windows[kind] = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        // Settings opens with nothing selected: otherwise its first text field (the stream password, an input's
+        // name) takes the cursor and the pane scrolls down to it.
+        if kind == .settings { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
     /// Settings, on a particular tab.
@@ -30,6 +33,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
         if let tabs = windows[.settings]?.contentViewController as? NSTabViewController,
            let index = SettingsView.Pane.allCases.firstIndex(of: pane) {
             tabs.selectedTabViewItemIndex = index
+            DispatchQueue.main.async { tabs.view.window?.makeFirstResponder(nil) }
         }
     }
 
@@ -38,7 +42,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
         switch kind {
         case .settings:
             // Classic Mac settings: toolbar tabs with icons, the window titled after the selected tab.
-            let tabs = NSTabViewController()
+            let tabs = SettingsTabs()
             tabs.tabStyle = .toolbar
             for pane in SettingsView.Pane.allCases {
                 let host = NSHostingController(rootView: SettingsView(model: model, pane: pane))
@@ -88,5 +92,13 @@ final class AppWindows: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === windows[.welcome], let model, !model.onboardingComplete else { return }
         model.finishOnboarding()
+    }
+}
+
+/// Settings' tabs: switching to one doesn't put the cursor in its first text field (which scrolled the pane).
+private final class SettingsTabs: NSTabViewController {
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        DispatchQueue.main.async { [weak self] in self?.view.window?.makeFirstResponder(nil) }
     }
 }

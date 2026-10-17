@@ -179,7 +179,7 @@ struct MenuView: View {
                 Picker("Input", selection: $model.inputDeviceUID) {
                     Text("System default").tag(String?.none)
                     ForEach(model.menuDevices) { device in
-                        Text(device.uid == SystemAudioTap.uid ? model.systemAudioLabel : device.name).tag(Optional(device.uid))
+                        Text(device.uid == SystemAudioTap.uid ? model.systemAudioLabel : model.deviceLabel(device)).tag(Optional(device.uid))
                     }
                 }
                 .labelsHidden()
@@ -188,7 +188,7 @@ struct MenuView: View {
                 if let device = model.selectedDevice, device.inputChannels > 2 {
                     Picker("Channels", selection: $model.firstChannel) {
                         ForEach(device.channelPairs, id: \.first) { pair in
-                            Text(pair.label).tag(pair.first)
+                            Text(model.pairLabel(device, pair)).tag(pair.first)
                         }
                     }
                     .labelsHidden()

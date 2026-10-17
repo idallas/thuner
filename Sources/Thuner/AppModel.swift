@@ -586,6 +586,49 @@ final class AppModel {
         devices.first { $0.uid == inputDeviceUID }
     }
 
+    // MARK: Input names
+
+    /// Names given to inputs ("Turntable" for an interface's 3–4), by `deviceUID#firstChannel` (0 for a mono or
+    /// stereo device). Over SSH: `defaults write com.idallas.thuner inputNames -dict-add '<uid>#2' Turntable`.
+    var inputNames: [String: String] {
+        didSet {
+            save(inputNames, "inputNames")
+            // Other Macs see the name as the stream's source.
+            if streamSharing { restartCapture() }
+        }
+    }
+
+    private static func inputKey(_ device: AudioInputDevice, first: Int) -> String {
+        "\(device.uid)#\(device.inputChannels <= 2 ? 0 : first)"
+    }
+
+    func inputName(_ device: AudioInputDevice, first: Int) -> String? {
+        inputNames[Self.inputKey(device, first: first)].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    func setInputName(_ name: String, for device: AudioInputDevice, first: Int) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        inputNames[Self.inputKey(device, first: first)] = trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The selected input's name, if it has one.
+    var selectedInputName: String? {
+        selectedDevice.flatMap { inputName($0, first: firstChannel) }
+    }
+
+    /// A channel pair for pickers: its name with the channels ("Turntable (3–4)"), or the plain label.
+    func pairLabel(_ device: AudioInputDevice, _ pair: (first: Int, label: String)) -> String {
+        guard let name = inputName(device, first: pair.first) else { return pair.label }
+        let numbers = pair.first + 1 < device.inputChannels ? "\(pair.first + 1)–\(pair.first + 2)" : "\(pair.first + 1)"
+        return "\(name) (\(numbers))"
+    }
+
+    /// A device for the input picker: a mono or stereo device's own name, or its given one with it.
+    func deviceLabel(_ device: AudioInputDevice) -> String {
+        guard device.inputChannels <= 2, let name = inputName(device, first: 0) else { return device.name }
+        return "\(name) (\(device.name))"
+    }
+
     // MARK: Internals
 
     private var gate: LevelGate
@@ -675,6 +718,7 @@ final class AppModel {
         streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
         streamOutputUID = d.string(forKey: "streamOutputUID")
         streamOutputChannel = d.integer(forKey: "streamOutputChannel")
+        inputNames = d.dictionary(forKey: "inputNames") as? [String: String] ?? [:]
         // Set over SSH on a headless Mac (`defaults write com.idallas.thuner streamPassword …`): move it into the
         // Keychain and out of the readable preferences.
         if let typed = d.string(forKey: "streamPassword") {
@@ -867,12 +911,14 @@ final class AppModel {
         let config = AudioCapture.Config(deviceUID: inputDeviceUID, firstChannel: firstChannel, channelCount: 2,
                                          systemAudioMode: systemAudioMode,
                                          systemAudioApps: Set(systemAudioApps.map(\.bundleID)),
-                                         streamFrames: streamSharing ? 128 : nil)
+                                         streamFrames: streamSharing ? 128 : nil,
+                                         sourceName: selectedInputName)
         do {
             try capture.start(config)
             captureError = nil
             captureNotice = nil
-            note("Listening to \(usingSystemAudio ? systemAudioLabel : capture.activeDeviceName ?? "default input")")
+            let name = selectedInputName.map { "\($0) (\(capture.activeDeviceName ?? "input"))" }
+            note("Listening to \(usingSystemAudio ? systemAudioLabel : name ?? capture.activeDeviceName ?? "default input")")
         } catch AudioCapture.CaptureError.waitingForApps {
             captureError = nil
             captureNotice = "Waiting for \(systemAudioApps.map(\.name).joined(separator: " or ")) to play"

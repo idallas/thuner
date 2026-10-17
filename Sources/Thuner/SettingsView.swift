@@ -121,6 +121,8 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
+                    InputNameSection(model: model)
+
                     Section("Sources") {
                         Toggle("Use Apple Music when it's playing", isOn: $model.useAppleMusic)
                         Toggle("Use Spotify when it's playing", isOn: $model.useSpotify)
@@ -728,5 +730,76 @@ private struct StreamingSettings: View {
 
     private static func rate(_ hz: Double) -> String {
         hz.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(hz / 1000)) kHz" : String(format: "%.1f kHz", hz / 1000)
+    }
+}
+
+/// Names for inputs ("Turntable" for an interface's 3–4): one for the input selected now, and the ones given before.
+private struct InputNameSection: View {
+    @Bindable var model: AppModel
+    @State private var draft = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        Section {
+            if let device = model.selectedDevice {
+                TextField(device.inputChannels > 2 ? "Name for \(device.name) \(channels(device))" : "Name for \(device.name)",
+                          text: $draft, prompt: Text("None"))
+                    .focused($editing)
+                    .onSubmit(save)
+                    .onChange(of: editing) { _, now in if !now { save() } }
+                    .onAppear { draft = model.selectedInputName ?? "" }
+                    .onChange(of: model.inputDeviceUID) { draft = model.selectedInputName ?? "" }
+                    .onChange(of: model.firstChannel) { draft = model.selectedInputName ?? "" }
+            } else {
+                Text("Choose an input in the menu to name it (System default and System Audio can't be named).")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(named, id: \.key) { entry in
+                HStack {
+                    Text(entry.name)
+                    Spacer()
+                    Text(entry.input).foregroundStyle(.secondary)
+                    Button {
+                        model.inputNames[entry.key] = nil
+                        if entry.key == currentKey { draft = "" }
+                    } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Forget this name")
+                }
+            }
+        } header: {
+            Text("Input names")
+        } footer: {
+            Text("A name for the input (or channel pair) ThUNER listens to, like \"Turntable\" for an interface's 3–4. Shown in the menu, and to Macs listening to this one's stream.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var currentKey: String? {
+        model.selectedDevice.map { "\($0.uid)#\($0.inputChannels <= 2 ? 0 : model.firstChannel)" }
+    }
+
+    private func channels(_ device: AudioInputDevice) -> String {
+        let first = model.firstChannel
+        return first + 1 < device.inputChannels ? "\(first + 1)–\(first + 2)" : "\(first + 1)"
+    }
+
+    private func save() {
+        guard let device = model.selectedDevice else { return }
+        guard draft != (model.selectedInputName ?? "") else { return }
+        model.setInputName(draft, for: device, first: model.firstChannel)
+    }
+
+    /// Every name given, with the input it's for ("M4 3–4"), or the device's ID if it isn't connected.
+    private var named: [(key: String, name: String, input: String)] {
+        model.inputNames.sorted { $0.value < $1.value }.map { key, name in
+            let parts = key.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            let uid = String(parts.first ?? "")
+            let first = Int(parts.count > 1 ? parts[1] : "0") ?? 0
+            guard let device = model.devices.first(where: { $0.uid == uid }) else { return (key, name, "not connected") }
+            let channels = device.inputChannels <= 2 ? "" : (first + 1 < device.inputChannels ? " \(first + 1)–\(first + 2)" : " \(first + 1)")
+            return (key, name, device.name + channels)
+        }
     }
 }
