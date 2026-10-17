@@ -121,34 +121,46 @@ final class AppModel {
     private(set) var streamPlayedLevels = Stereo.silent
     @ObservationIgnored private var streamLevelTimer: Timer?
 
-    private func startStreamLevels() {
-        guard streamLevelTimer == nil else { return }
-        streamLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.pollStreamLevels() }
+    /// Levels are read 20 times a second while something shows them: this Mac's stream meters (while listening to
+    /// a stream), or a meter Twist Commando is subscribed to.
+    private func updateLevelPolling() {
+        let wanted = streamReceiver != nil || (twistCommandoEnabled && !appLink.subscribedMeters.isEmpty)
+        if wanted, streamLevelTimer == nil {
+            streamLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pollLevels() }
+            }
+        } else if !wanted, streamLevelTimer != nil {
+            streamLevelTimer?.invalidate()
+            streamLevelTimer = nil
+        }
+        if streamReceiver == nil, streamSourceLevels != nil || streamPlayedLevels != .silent {
+            streamSourceLevels = nil
+            streamPlayedLevels = .silent
+            controls.refreshStreamLevels()
         }
     }
 
-    private func stopStreamLevels() {
-        streamLevelTimer?.invalidate()
-        streamLevelTimer = nil
-        streamSourceLevels = nil
-        streamPlayedLevels = .silent
-        controls.refreshStreamLevels()
-    }
-
-    private func pollStreamLevels() {
-        guard let receiver = streamReceiver else { return stopStreamLevels() }
-        let levels = receiver.takeLevels()
-        // Peaks jump up and fall back 15 dB a second, like a hardware meter.
-        func fall(_ old: Double, _ new: Double) -> Double { max(new, old - 1.5, -160) }
-        if let source = levels.source {
+    private func pollLevels() {
+        // Peaks since the last read go to Twist Commando as they are (it does its own falloff).
+        let input = capture.peaks.takeIfFresh()
+        let stream = streamReceiver?.takeLevels()
+        if twistCommandoEnabled, !appLink.subscribedMeters.isEmpty {
+            if let input { appLink.sendMeter("inputLevel", levels: [input.left, input.right]) }
+            if let source = stream?.source { appLink.sendMeter("streamSourceLevel", levels: [source.left, source.right]) }
+            if let played = stream?.received { appLink.sendMeter("streamLevel", levels: [played.left, played.right]) }
+        }
+        guard let stream else { return }
+        // On screen they jump up and fall back 15 dB a second, like a hardware meter.
+        func fall(_ old: Double, _ new: Double?) -> Double { max(new ?? -160, old - 0.75, -160) }
+        if stream.sourceAlive {
             let old = streamSourceLevels ?? .silent
-            streamSourceLevels = Stereo(left: fall(old.left, source.left), right: fall(old.right, source.right))
+            let source = Stereo(left: fall(old.left, stream.source?.left), right: fall(old.right, stream.source?.right))
+            if source != streamSourceLevels { streamSourceLevels = source }
         } else if streamSourceLevels != nil {
             streamSourceLevels = nil
         }
-        let played = Stereo(left: fall(streamPlayedLevels.left, levels.received.left),
-                            right: fall(streamPlayedLevels.right, levels.received.right))
+        let played = Stereo(left: fall(streamPlayedLevels.left, stream.received?.left),
+                            right: fall(streamPlayedLevels.right, stream.received?.right))
         if played != streamPlayedLevels { streamPlayedLevels = played }
         controls.refreshStreamLevels()
     }
@@ -856,7 +868,7 @@ final class AppModel {
     private func applyStreamReceiver() {
         streamReceiver?.stop()
         streamReceiver = nil
-        stopStreamLevels()
+        updateLevelPolling()
         streamStats = nil
         streamSenderStatus = nil
         streamProblem = nil
@@ -884,7 +896,7 @@ final class AppModel {
         }
         streamReceiver = receiver
         receiver.start()
-        startStreamLevels()
+        updateLevelPolling()
         streamProblem = receiver.error
         note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
     }
@@ -1098,8 +1110,10 @@ final class AppModel {
             case .toggle: .toggle
             case .button: .button
             }
-            return AppLinkClient.Control(id: definition.id, name: definition.name, kind: kind, group: definition.group)
+            return AppLinkClient.Control(id: definition.id, name: definition.name, kind: kind, group: definition.group,
+                                         meterChannels: definition.meterChannels)
         })
+        link.onMeterSubscriptionsChange = { [weak self] in self?.updateLevelPolling() }
         link.onTurn = { [weak self] id, value, _ in
             if let value { self?.controls.turn(id, to: value) }
         }

@@ -414,5 +414,8 @@ struct SplitMix {
         #expect(abs(first.left - -6.02) < 0.01)
         #expect(abs(first.right - -20) < 0.01)
         #expect(levels.take() == (left: -160, right: -160))
+        #expect(levels.takeIfFresh() == nil)
+        levels.record(left: silent, right: silent, frames: 64)
+        #expect(levels.takeIfFresh()! == (left: -160, right: -160))
     }
 }

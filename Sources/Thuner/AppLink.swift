@@ -17,6 +17,9 @@ final class AppLinkClient {
         var name: String
         var kind: Kind
         var group: String?
+        /// Offered as a meter with this many channels where Twist Commando supports meters (protocol 2);
+        /// otherwise it's the plain `kind` above.
+        var meterChannels: Int?
     }
 
     /// The current state of one control, as last reported by the app.
@@ -27,6 +30,12 @@ final class AppLinkClient {
     }
 
     static let port: UInt16 = 9034
+
+    /// Twist Commando said it knows meters (protocol 2's welcome).
+    private(set) var supportsMeters = false
+    /// Meters something in Twist Commando is showing, so their levels are wanted.
+    private(set) var subscribedMeters: Set<String> = []
+    var onMeterSubscriptionsChange: (() -> Void)?
 
     var onTurn: ((_ id: String, _ value: Double?, _ steps: Int?) -> Void)?
     var onPress: ((_ id: String, _ down: Bool) -> Void)?
@@ -59,15 +68,33 @@ final class AppLinkClient {
         connection?.cancel()
         connection = nil
         setConnected(nil)
+        setSubscribed([])
     }
 
     /// Records a control's current state; sends an update if connected and it changed.
     func set(_ id: String, value: Double? = nil, text: String? = nil, on: Bool? = nil) {
         let state = State(value: value.map { min(max($0, 0), 1) }, text: text, on: on)
         states[id] = state
-        guard connectedVersion != nil, sent[id] != state else { return }
+        guard connectedVersion != nil, sent[id] != state, !isMeter(id) else { return }
         sent[id] = state
         send(Self.fields(["type": "update", "id": id], state))
+    }
+
+    /// A meter's peak levels in dBFS since the last call; sent only while Twist Commando wants them.
+    func sendMeter(_ id: String, levels: [Double]) {
+        guard connectedVersion != nil, subscribedMeters.contains(id) else { return }
+        send(["type": "meter", "id": id, "levels": levels.map { ($0 * 10).rounded() / 10 }])
+    }
+
+    private func isMeter(_ id: String) -> Bool {
+        supportsMeters && controls.contains { $0.id == id && $0.meterChannels != nil }
+    }
+
+    private func setSubscribed(_ meters: Set<String>) {
+        guard meters != subscribedMeters else { return }
+        subscribedMeters = meters
+        log.notice("Meters wanted: \(meters.sorted().joined(separator: ", "), privacy: .public)")
+        onMeterSubscriptionsChange?()
     }
 
     // MARK: Connection
@@ -87,7 +114,7 @@ final class AppLinkClient {
         switch state {
         case .ready:
             buffer.removeAll()
-            send(["type": "hello", "app": Bundle.main.bundleIdentifier ?? "com.idallas.thuner", "name": "ThUNER", "protocol": 1])
+            send(["type": "hello", "app": Bundle.main.bundleIdentifier ?? "com.idallas.thuner", "name": "ThUNER", "protocol": 2])
             receive(on: connection)
         case .waiting, .failed, .cancelled:
             // Not running (connection refused) or gone: try again in a few seconds.
@@ -95,6 +122,7 @@ final class AppLinkClient {
             connection.cancel()
             self.connection = nil
             setConnected(nil)
+            setSubscribed([])
             scheduleRetry()
         default:
             break
@@ -115,7 +143,9 @@ final class AppLinkClient {
         guard version != connectedVersion else { return }
         connectedVersion = version
         onConnectionChange?(version)
-        if let version { log.notice("Connected to Twist Commando \(version, privacy: .public)") }
+        if let version {
+            log.notice("Connected to Twist Commando \(version, privacy: .public)\(self.supportsMeters ? ", with meters" : "", privacy: .public)")
+        }
     }
 
     private func receive(on connection: NWConnection) {
@@ -145,6 +175,8 @@ final class AppLinkClient {
     private func handle(_ type: String, _ message: [String: Any]) {
         switch type {
         case "welcome":
+            // Protocol 2 and up can take meters; earlier versions would reject the kind.
+            supportsMeters = message["meters"] as? Bool ?? false
             // Declare the controls before anything (including the connection callback) sends updates for them.
             sendControls()
             setConnected(message["version"] as? String ?? "?")
@@ -154,6 +186,11 @@ final class AppLinkClient {
         case "press":
             guard let id = message["id"] as? String else { return }
             onPress?(id, message["down"] as? Bool ?? false)
+        case "meterSubscribe":
+            guard let id = message["id"] as? String else { return }
+            var meters = subscribedMeters
+            if message["on"] as? Bool ?? false { meters.insert(id) } else { meters.remove(id) }
+            setSubscribed(meters)
         case "error":
             log.error("Twist Commando: \(message["message"] as? String ?? "error", privacy: .public)")
         default:
@@ -165,10 +202,15 @@ final class AppLinkClient {
         let list: [[String: Any]] = controls.map { control in
             var item: [String: Any] = ["id": control.id, "name": control.name, "kind": control.kind.rawValue]
             if let group = control.group { item["group"] = group }
-            if let state = states[control.id] { item = Self.fields(item, state) }
+            if supportsMeters, let channels = control.meterChannels {
+                item["kind"] = "meter"
+                item["channels"] = channels
+            } else if let state = states[control.id] {
+                item = Self.fields(item, state)
+            }
             return item
         }
-        sent = states
+        sent = states.filter { !isMeter($0.key) }
         send(["type": "controls", "controls": list])
     }
 

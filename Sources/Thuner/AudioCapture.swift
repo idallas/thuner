@@ -87,6 +87,8 @@ final class AudioCapture: @unchecked Sendable {
     static let matchSampleRate: Double = 48_000
 
     let ring = SampleRing(sampleRate: AudioCapture.matchSampleRate, seconds: 15)
+    /// The input's left/right peaks (the chosen pair), for meters.
+    let peaks = PeakLevels()
     /// RMS level in dBFS for each captured buffer. Called on the audio tap's thread.
     var onLevel: ((Double) -> Void)?
     /// The engine stopped on its own (device unplugged, format change). Called on the main queue.
@@ -324,6 +326,8 @@ final class AudioCapture: @unchecked Sendable {
         mixed.frameLength = AVAudioFrameCount(frames)
         let out = mixed.floatChannelData![0]
 
+        peaks.record(left: data[channels.lowerBound], right: data[channels.count > 1 ? channels.lowerBound + 1 : channels.lowerBound],
+                     frames: frames)
         // Downmix the selected channels and measure RMS in one pass.
         let scale = 1 / Float(channels.count)
         var sumSquares: Float = 0

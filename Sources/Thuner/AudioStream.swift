@@ -239,25 +239,28 @@ final class AudioStreamReceiver: @unchecked Sendable {
     private let lastAudio = Atomic<UInt64>(0)
     /// Peak levels for meters: the sender's input as it measured it (the loudest since last read, and when it last
     /// said), and what this Mac played.
-    private let sourceLevels = Mutex<(levels: (left: Double, right: Double), at: Double)?>(nil)
+    private let sourceLevels = Mutex<(levels: (left: Double, right: Double), at: Double, fresh: Bool)?>(nil)
     private let received = PeakLevels()
 
     struct Levels {
-        /// Nil when the sender hasn't said lately (it's gone, or an older ThUNER).
+        /// The sender's input since the last call; nil if it hasn't said anything new.
         var source: (left: Double, right: Double)?
-        var received: (left: Double, right: Double)
+        /// Whether the sender has said anything lately (it's gone, or an older ThUNER, if not).
+        var sourceAlive: Bool
+        /// What played here since the last call; nil if nothing did (the output's closed, or between buffers).
+        var received: (left: Double, right: Double)?
     }
 
     /// Peaks since the last call, in dBFS.
     func takeLevels() -> Levels {
-        let source = sourceLevels.withLock { current -> (left: Double, right: Double)? in
-            defer { current = current.map { ((-160, -160), $0.at) } }
-            guard let current, HostClock.now() - current.at < 1 else { return nil }
-            return current.levels
+        let (source, alive) = sourceLevels.withLock { current -> ((left: Double, right: Double)?, Bool) in
+            guard let latest = current else { return (nil, false) }
+            let alive = HostClock.now() - latest.at < 1
+            guard latest.fresh else { return (nil, alive) }
+            current?.fresh = false
+            return (latest.levels, alive)
         }
-        // Nothing playing: the output's closed, so nothing's recording peaks.
-        let played = output == nil ? (left: -160.0, right: -160.0) : received.take()
-        return Levels(source: source, received: played)
+        return Levels(source: source, sourceAlive: alive, received: received.takeIfFresh())
     }
 
     /// Resilient only: asking for lost packets again. Network thread only.
@@ -390,8 +393,9 @@ final class AudioStreamReceiver: @unchecked Sendable {
                 case .levels:
                     guard let levels = StreamWire.controlBody(StreamWire.Levels.self, from: bytes) else { return }
                     sourceLevels.withLock { current in
-                        let previous = current?.levels
-                        current = ((max(levels.left, previous?.left ?? -160), max(levels.right, previous?.right ?? -160)), arrival)
+                        // Unread peaks still count: keep the loudest.
+                        let previous = current?.fresh == true ? current?.levels : nil
+                        current = ((max(levels.left, previous?.left ?? -160), max(levels.right, previous?.right ?? -160)), arrival, true)
                     }
                 case .status:
                     var status = StreamWire.controlBody(StreamWire.Status.self, from: bytes)

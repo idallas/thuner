@@ -20,6 +20,9 @@ final class ControlSurface {
         var group: String
         /// Display-only levels can't be turned.
         var readOnly = false
+        /// A level that's really a meter: where Twist Commando supports meters, it gets this many channels of peak
+        /// levels instead (and the 0…1 value stays for everything else).
+        var meterChannels: Int?
     }
 
     struct State: Equatable, Sendable {
@@ -31,11 +34,11 @@ final class ControlSurface {
     let definitions: [Definition] = [
         .init(id: "listening", name: "Listening", kind: .toggle, group: "Listening"),
         .init(id: "threshold", name: "Silence Threshold", kind: .level, group: "Listening"),
-        .init(id: "inputLevel", name: "Input Level", kind: .level, group: "Listening", readOnly: true),
+        .init(id: "inputLevel", name: "Input Level", kind: .level, group: "Listening", readOnly: true, meterChannels: 2),
         .init(id: "identify", name: "Identify Now", kind: .button, group: "Listening"),
         .init(id: "listenHere", name: "Listen Here", kind: .button, group: "Listening"),
-        .init(id: "streamSourceLevel", name: "Stream Source Level", kind: .level, group: "Streaming", readOnly: true),
-        .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true),
+        .init(id: "streamSourceLevel", name: "Stream Source Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
+        .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
         .init(id: "nowPlaying", name: "Now Playing", kind: .level, group: "Now Playing", readOnly: true),
         .init(id: "radio", name: "Radio Mode", kind: .toggle, group: "Now Playing"),
         .init(id: "brightness", name: "Tuneshine Brightness", kind: .level, group: "Display"),
