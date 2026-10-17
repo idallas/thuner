@@ -10,6 +10,8 @@ public final class FrameFIFO: @unchecked Sendable {
     private let written = Atomic<Int>(0)
     private let read = Atomic<Int>(0)
 
+    private let margin = 16_384
+
     public init(capacity: Int) {
         self.capacity = capacity
         left = .allocate(capacity: capacity)
@@ -36,7 +38,8 @@ public final class FrameFIFO: @unchecked Sendable {
         let w = written.load(ordering: .acquiring)
         var start = read.load(ordering: .relaxed)
         // Fell too far behind: skip to the newest audio that's still intact (keeping clear of the writer).
-        if w - start > capacity - 1_024 { start = w - (capacity - 1_024) }
+        // (The margin is more than an I/O buffer can be, so nothing being written is read.)
+        if w - start > capacity - margin { start = w - (capacity - margin) }
         let n = Swift.min(w - start, max)
         for i in 0..<n {
             l[i] = left[(start + i) % capacity]

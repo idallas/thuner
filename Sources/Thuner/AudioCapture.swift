@@ -155,6 +155,7 @@ final class AudioCapture: @unchecked Sendable {
             packetizer: config.streamFrames.map { frames in { Packetizer(framesPerPacket: frames, sampleRate: $0) } },
             ready: sharing.map { sink in { sink.packetsReady() } })
 
+        try tap.start()
         // Listening: every 50 ms, whatever arrived goes through the downmix, the level and the match ring.
         let rate = tap.sampleRate
         let stereo = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 2, interleaved: false)!
@@ -174,7 +175,6 @@ final class AudioCapture: @unchecked Sendable {
             }
         }
 
-        try tap.start()
         timer.resume()
         tap.onChange { [weak self] in
             self?.log.notice("Input device changed; restarting")

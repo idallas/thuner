@@ -422,7 +422,7 @@ struct SplitMix {
 
 @Suite struct FrameFIFOTests {
     @Test func passesFramesInOrderAndDropsTheOldestWhenBehind() {
-        let fifo = FrameFIFO(capacity: 4_096)
+        let fifo = FrameFIFO(capacity: 19_456)
         let ramp = (0..<3_000).map(Float.init)
         fifo.write(left: ramp, right: ramp.map { -$0 }, frames: 3_000)
         var l = [Float](repeating: 0, count: 8_192), r = l
@@ -431,9 +431,59 @@ struct SplitMix {
         #expect(fifo.read(into: &l, &r, max: 8_192) == 2_000)
         #expect(l[0] == 1_000)
         #expect(fifo.read(into: &l, &r, max: 8_192) == 0)
-        // Far behind: only the newest (capacity - 1024) frames come out.
+        // Far behind: only the newest (capacity - 16384) frames come out.
         for _ in 0..<3 { fifo.write(left: ramp, right: ramp, frames: 3_000) }
         #expect(fifo.read(into: &l, &r, max: 8_192) == 3_072)
         #expect(l[3_071] == 2_999)
+    }
+}
+
+@Suite struct StreamGateTests {
+    private func header(_ seq: UInt32, id: UInt16 = 1, time: UInt64? = nil, rate: UInt32 = 48_000) -> AudioPacketHeader {
+        AudioPacketHeader(streamID: id, sequence: seq, sampleTime: time ?? UInt64(seq) * 128, sampleRate: rate, frames: 128)
+    }
+
+    private func locked() -> StreamGate {
+        var gate = StreamGate()
+        for s in UInt32(0)..<8 { _ = gate.admit(header(s)) }
+        return gate
+    }
+
+    @Test func locksAfterEightConsistentPackets() {
+        var gate = StreamGate()
+        let admitted = (UInt32(0)..<10).map { gate.admit(header($0)) }
+        #expect(admitted == [false, false, false, false, false, false, false, true, true, true])
+    }
+
+    @Test func letsReorderingResendsAndSkipsThrough() {
+        var gate = locked()
+        let results = [
+            gate.admit(header(9)),
+            gate.admit(header(8)),                            // late / resent
+            gate.admit(header(10, time: 10 * 128 + 4_800)),   // the input skipped 0.1 s
+            gate.admit(header(11, time: 11 * 128 + 4_800)),
+        ]
+        #expect(results == [true, true, true, true])
+    }
+
+    @Test func oneForgedPacketChangesNothing() {
+        var gate = locked()
+        let results = [
+            gate.admit(header(8 + 1 << 30)),                 // sequence far ahead (would mute raw)
+            gate.admit(header(8, time: UInt64.max - 10)),    // absurd time (would overflow)
+            gate.admit(header(8, id: 2)),                    // another stream ID
+            gate.admit(header(8, rate: 44_100)),             // another rate
+            gate.admit(header(8)),
+            gate.admit(header(9)),
+        ]
+        #expect(results == [false, false, false, false, true, true])
+    }
+
+    @Test func aRealRestartTakesOverAfterEightPackets() {
+        var gate = locked()
+        let restarted = (UInt32(0)..<8).map { gate.admit(header(500 + $0, id: 7, time: UInt64($0) * 128, rate: 44_100)) }
+        #expect(restarted.last == true && restarted.dropLast().allSatisfy { !$0 })
+        let old = gate.admit(header(9, id: 1))  // the old stream is gone
+        #expect(!old)
     }
 }

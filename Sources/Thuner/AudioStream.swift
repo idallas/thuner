@@ -17,7 +17,13 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         var host: String
         var method: StreamMethod
         var lastSeen: Date
+        /// Packets it may still ask to have resent this second.
+        var resendBudget = Self.resendsPerSecond
+        var budgetSince = Date()
+        static let resendsPerSecond = 200
     }
+    /// At most this many Macs listening at once (each is a full stream: ~2.4 Mbit/s).
+    static let maxListeners = 4
 
     /// Whether to share at all; when off, subscribers are told so and get nothing. Main thread.
     var sharing = false {
@@ -57,6 +63,12 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     private var source: DispatchSourceRead?
     private var expiry: Timer?
     private var lastLog = Date.distantPast
+    private var lastIgnoredLog = Date.distantPast
+
+    /// Another Mac's name, as it gave it: shown and logged, so kept short and printable.
+    private static func displayable(_ host: String) -> String {
+        String(String.UnicodeScalarView(host.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(63)))
+    }
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     private let log = Logger(subsystem: "com.idallas.thuner", category: "stream")
 
@@ -139,21 +151,37 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         guard let (data, sender) = UDP.receive(fd) else { return }
         data.withUnsafeBytes { bytes in
             guard let kind = StreamWire.kind(of: bytes) else { return }
-            let key = UDP.string(sender)
+            // One listener per Mac: keyed by address alone, so one Mac can't open a stream per port.
+            let key = UDP.string(sender.sin_addr)
+            // Everything here is only for ThUNERs found over Bonjour (or this Mac).
+            guard UDP.isLoopback(sender.sin_addr) || isKnownPeer?(sender.sin_addr) == true else {
+                if Date().timeIntervalSince(lastIgnoredLog) > 10 {
+                    lastIgnoredLog = Date()
+                    log.notice("Ignoring stream messages from \(key, privacy: .public): not a ThUNER found over Bonjour")
+                }
+                return
+            }
             switch kind {
             case .subscribe:
-                guard let request = StreamWire.controlBody(StreamWire.Subscribe.self, from: bytes) else { return }
-                guard UDP.isLoopback(sender.sin_addr) || isKnownPeer?(sender.sin_addr) == true else {
-                    log.notice("Ignoring a stream request from \(key, privacy: .public): not a ThUNER found over Bonjour")
-                    return
-                }
+                guard var request = StreamWire.controlBody(StreamWire.Subscribe.self, from: bytes) else { return }
+                request.host = Self.displayable(request.host)
                 let (packetizer, input, latency) = shared.withLock { ($0.packetizer, $0.source, $0.latencyFrames) }
                 let live = sharing && packetizer != nil
-                if live {
-                    if listeners[key] == nil { log.notice("\(request.host, privacy: .public) started listening (\(request.method.rawValue, privacy: .public))") }
-                    let isNew = listeners[key] == nil
-                    listeners[key] = Listener(address: sender, host: request.host, method: request.method, lastSeen: Date())
-                    if isNew { listenersChanged() }
+                if live, listeners[key] != nil || listeners.count < Self.maxListeners {
+                    if var listener = listeners[key] {
+                        // The same Mac (its port changes if its ThUNER restarted).
+                        let moved = UDP.string(listener.address) != UDP.string(sender)
+                        listener.address = sender
+                        listener.host = request.host
+                        listener.method = request.method
+                        listener.lastSeen = Date()
+                        listeners[key] = listener
+                        if moved { listenersChanged() }
+                    } else {
+                        log.notice("\(request.host, privacy: .public) (\(key, privacy: .public)) started listening (\(request.method.rawValue, privacy: .public))")
+                        listeners[key] = Listener(address: sender, host: request.host, method: request.method, lastSeen: Date())
+                        listenersChanged()
+                    }
                 }
                 let status = StreamWire.Status(host: host, sharing: live, source: live ? input : nil,
                                                sampleRate: packetizer.map { Double($0.sampleRate) },
@@ -167,10 +195,18 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                     listenersChanged()
                 }
             case .resend:
-                // Only for someone already listening, and only a handful at a time.
-                guard listeners[key] != nil, let request = StreamWire.controlBody(StreamWire.Resend.self, from: bytes) else { return }
-                let sequences = Array(request.sequences.prefix(64))
-                shared.withLock { $0.resends.append((sender, sequences)) }
+                // Only for someone already listening, each packet once, and no more than a lossy network needs.
+                guard var listener = listeners[key], let request = StreamWire.controlBody(StreamWire.Resend.self, from: bytes) else { return }
+                if Date().timeIntervalSince(listener.budgetSince) >= 1 {
+                    listener.resendBudget = Listener.resendsPerSecond
+                    listener.budgetSince = Date()
+                }
+                var seen = Set<UInt32>()
+                let sequences = Array(request.sequences.prefix(64).filter { seen.insert($0).inserted }.prefix(listener.resendBudget))
+                listener.resendBudget -= sequences.count
+                listeners[key] = listener
+                guard !sequences.isEmpty else { return }
+                shared.withLock { $0.resends.append((listener.address, sequences)) }
                 ready.signal()
             case .audio, .resentAudio, .status, .levels:
                 break
@@ -263,6 +299,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
         return Levels(source: source, sourceAlive: alive, received: received.takeIfFresh())
     }
 
+    /// Network thread only: which packets belong to the stream being played.
+    private var gate = StreamGate()
     /// Resilient only: asking for lost packets again. Network thread only.
     private var resendTracker = ResendTracker()
     private let resendCounts = Mutex((requested: 0, recovered: 0, abandoned: 0))
@@ -279,6 +317,18 @@ final class AudioStreamReceiver: @unchecked Sendable {
         log.notice("Stream quiet; released the output")
         logAudioActivity()
         onChange?()
+    }
+
+    /// When opening the output last failed (unplugged, or it kept changing).
+    private var outputFailedAt: Date?
+
+    /// The output couldn't be opened but audio is coming: try again every few seconds (the interface may be back).
+    @MainActor private func retryOutputIfFailed() {
+        guard output == nil, let failed = outputFailedAt, Date().timeIntervalSince(failed) >= 5,
+              HostClock.now() - Double(bitPattern: lastAudio.load(ordering: .relaxed)) < 2 else { return }
+        outputFailedAt = nil
+        log.notice("Trying the stream output again")
+        startOutput(sampleRate: streamRate)
     }
 
     /// Subscribed and the sender is sharing, but nothing's playing, so the output is closed. Main thread.
@@ -326,6 +376,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
 
     @MainActor private func subscribe() {
         releaseOutputIfQuiet()
+        retryOutputIfFailed()
         UDP.send(fd, StreamWire.control(.subscribe, StreamWire.Subscribe(host: host, method: settings.method, sentAt: HostClock.now())),
                  to: sourceAddress)
     }
@@ -368,7 +419,9 @@ final class AudioStreamReceiver: @unchecked Sendable {
             let n = withUnsafeMutablePointer(to: &sender) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(fd, &buffer, buffer.count, MSG_DONTWAIT, $0, &length) }
             }
+            // Nothing of ours is bigger than one Ethernet frame's worth; the queue's slots aren't either.
             guard n > 0 else { return }
+            guard n <= StreamWire.maxDatagram else { continue }
             let arrival = HostClock.now()
             // Only the Mac we subscribed to.
             guard sender.sin_addr.s_addr == sourceAddress.sin_addr.s_addr, sender.sin_port == sourceAddress.sin_port else { continue }
@@ -376,7 +429,8 @@ final class AudioStreamReceiver: @unchecked Sendable {
                 let bytes = UnsafeRawBufferPointer(rebasing: raw[0..<n])
                 switch StreamWire.kind(of: bytes) {
                 case .audio, .resentAudio:
-                    guard let header = StreamWire.audioHeader(bytes) else { return }
+                    // Only packets that belong to the stream being played (see StreamGate).
+                    guard let header = StreamWire.audioHeader(bytes), gate.admit(header) else { return }
                     if settings.debugLoss > 0, !header.resent, Double.random(in: 0..<1) < settings.debugLoss { return }
                     lastAudio.store(arrival.bitPattern, ordering: .relaxed)
                     if settings.method == .resilient { trackLosses(header, at: arrival, socket: fd) }
@@ -391,7 +445,9 @@ final class AudioStreamReceiver: @unchecked Sendable {
                         return 8 + n
                     }
                 case .levels:
-                    guard let levels = StreamWire.controlBody(StreamWire.Levels.self, from: bytes) else { return }
+                    guard var levels = StreamWire.controlBody(StreamWire.Levels.self, from: bytes) else { return }
+                    levels.left = levels.left.isFinite ? min(max(levels.left, -160), 20) : -160
+                    levels.right = levels.right.isFinite ? min(max(levels.right, -160), 20) : -160
                     sourceLevels.withLock { current in
                         // Unread peaks still count: keep the loudest.
                         let previous = current?.fresh == true ? current?.levels : nil
@@ -453,6 +509,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
         }
         guard let deviceID, let outputRate = AudioDevices.nominalSampleRate(deviceID) else {
             if error == nil { error = "No output device" }
+            outputFailedAt = Date()
             onChange?()
             return
         }
@@ -483,6 +540,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
             try tap.start()
             output = tap
             self.playout = playout
+            outputFailedAt = nil
             shareRoundTrip()
             error = nil
             watch(deviceID)
@@ -490,6 +548,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
             log.notice("Stream output started: \(sampleRate) Hz stream to \(outputRate) Hz output, channel \(self.settings.outputChannel + 1), \(self.settings.method.rawValue, privacy: .public), margin \(self.settings.marginMs) ms, I/O buffer \(tap.ioBufferFrames) frames")
         } catch {
             self.error = "Couldn't start the output: \(error.localizedDescription)"
+            outputFailedAt = Date()
             log.error("Couldn't start the stream output: \(error.localizedDescription, privacy: .public)")
         }
         onChange?()
@@ -502,7 +561,15 @@ final class AudioStreamReceiver: @unchecked Sendable {
             MainActor.assumeIsolated {
                 guard let self, self.output != nil else { return }
                 self.recentRestarts = self.recentRestarts.filter { Date().timeIntervalSince($0) < 60 }
-                guard self.recentRestarts.count < 10 else { return }
+                guard self.recentRestarts.count < 10 else {
+                    // Too many in a row: let it settle, then the retry in subscribe() picks it up.
+                    self.stopOutput()
+                    self.playout = nil
+                    self.error = "The output keeps changing; trying again shortly"
+                    self.outputFailedAt = Date()
+                    self.onChange?()
+                    return
+                }
                 self.recentRestarts.append(Date())
                 self.log.notice("Stream output changed; restarting")
                 self.startOutput(sampleRate: self.streamRate)
@@ -630,6 +697,12 @@ enum UDP {
     static var loopback: sockaddr_in { address(in_addr(s_addr: INADDR_LOOPBACK.bigEndian), port: StreamWire.port) }
 
     static func isLoopback(_ ip: in_addr) -> Bool { UInt32(bigEndian: ip.s_addr) >> 24 == 127 }
+
+    static func string(_ ip: in_addr) -> String {
+        var ip = ip
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        return inet_ntop(AF_INET, &ip, &buffer, socklen_t(INET_ADDRSTRLEN)).map { String(cString: $0) } ?? "?"
+    }
 
     static func string(_ address: sockaddr_in) -> String {
         var ip = address.sin_addr

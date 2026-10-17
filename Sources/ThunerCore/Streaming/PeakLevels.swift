@@ -17,10 +17,19 @@ public final class PeakLevels: Sendable {
             pl = max(pl, abs(l[i]))
             pr = max(pr, abs(r[i]))
         }
-        // One writer, so load-then-store is enough; a reset landing in between just keeps a peak one read longer.
-        if pl > Float(bitPattern: left.load(ordering: .relaxed)) { left.store(pl.bitPattern, ordering: .relaxed) }
-        if pr > Float(bitPattern: right.load(ordering: .relaxed)) { right.store(pr.bitPattern, ordering: .relaxed) }
+        Self.raise(left, to: pl)
+        Self.raise(right, to: pr)
         fresh.store(true, ordering: .relaxed)
+    }
+
+    /// Raises a stored peak to `value` unless it's already higher; a reset in between can't make it lose `value`.
+    private static func raise(_ peak: borrowing Atomic<UInt32>, to value: Float) {
+        var current = peak.load(ordering: .relaxed)
+        while value > Float(bitPattern: current) {
+            let (exchanged, original) = peak.compareExchange(expected: current, desired: value.bitPattern, ordering: .relaxed)
+            if exchanged { return }
+            current = original
+        }
     }
 
     /// Like `take()`, but nil if no audio came since the last call (the capture delivers in batches, or stopped),

@@ -1,3 +1,5 @@
+import Synchronization
+
 /// The sending side, on the capture's real-time thread: collects frames into fixed-size packets, encodes them, and
 /// queues them for the network thread.
 public final class Packetizer: @unchecked Sendable {
@@ -6,15 +8,13 @@ public final class Packetizer: @unchecked Sendable {
     public let streamID: UInt16
     /// Finished datagrams, ready to send.
     public let packets: SPSCRing
-    /// Packets thrown away because the network thread fell behind.
-    public private(set) var overflows = 0
+    /// Packets thrown away because the network thread fell behind (counted on the capture thread, read anywhere).
+    private let overflowCount = Atomic<Int>(0)
+    public var overflows: Int { overflowCount.load(ordering: .relaxed) }
     /// The most frames handed over at once since the last `takeLargestAppend()`: the capture's real buffer size,
     /// whatever was asked for. For logs; not synchronized.
-    private var largestAppend = 0
-    public func takeLargestAppend() -> Int {
-        defer { largestAppend = 0 }
-        return largestAppend
-    }
+    private let largestAppend = Atomic<Int>(0)
+    public func takeLargestAppend() -> Int { largestAppend.exchange(0, ordering: .relaxed) }
 
     private let staging: UnsafeMutablePointer<Float>
     private var staged = 0
@@ -25,9 +25,15 @@ public final class Packetizer: @unchecked Sendable {
     private var timelineOrigin: Double?
     private var expectedInputTime: Double?
     /// Times the input skipped or repeated audio (its timestamps jumped), so the stream's timeline jumped with it.
-    public private(set) var discontinuities = 0
+    private let discontinuityCount = Atomic<Int>(0)
+    public var discontinuities: Int { discontinuityCount.load(ordering: .relaxed) }
 
-    public init(framesPerPacket: Int, sampleRate: Double, streamID: UInt16 = .random(in: .min ... .max), queuedPackets: Int = 256) {
+    /// Each new stream gets the next ID (from a random start), so a restart never reuses the one just before:
+    /// a receiver would take the new stream's packets, numbered from 0 again, for very late ones.
+    private static let nextStreamID = Atomic<UInt16>(.random(in: .min ... .max))
+    public static func newStreamID() -> UInt16 { nextStreamID.wrappingAdd(1, ordering: .relaxed).newValue }
+
+    public init(framesPerPacket: Int, sampleRate: Double, streamID: UInt16 = Packetizer.newStreamID(), queuedPackets: Int = 256) {
         self.framesPerPacket = min(max(framesPerPacket, 16), StreamWire.maxFramesPerPacket)
         self.sampleRate = UInt32(sampleRate.rounded())
         self.streamID = streamID
@@ -45,13 +51,13 @@ public final class Packetizer: @unchecked Sendable {
     /// and the receiver hears a short gap instead of everything after it arriving late.
     @discardableResult
     public func append(left: UnsafePointer<Float>, right: UnsafePointer<Float>, frames: Int, inputTime: Double? = nil) -> Int {
-        largestAppend = max(largestAppend, frames)
+        if frames > largestAppend.load(ordering: .relaxed) { largestAppend.store(frames, ordering: .relaxed) }
         if let inputTime {
             if let expected = expectedInputTime, abs(inputTime - expected) >= 1, let origin = timelineOrigin {
                 // Start a fresh packet at the device's new position; the partial one is dropped.
                 staged = 0
                 sampleTime = UInt64(max(inputTime - origin, Double(sampleTime)).rounded())
-                discontinuities += 1
+                discontinuityCount.add(1, ordering: .relaxed)
             }
             if timelineOrigin == nil { timelineOrigin = inputTime }
             expectedInputTime = inputTime + Double(frames)
@@ -70,7 +76,7 @@ public final class Packetizer: @unchecked Sendable {
                 let header = AudioPacketHeader(streamID: streamID, sequence: sequence, sampleTime: sampleTime,
                                                sampleRate: sampleRate, frames: framesPerPacket)
                 let queued = packets.push { StreamWire.writeAudio(header, samples: staging, to: $0) }
-                if queued { finished += 1 } else { overflows += 1 }
+                if queued { finished += 1 } else { overflowCount.add(1, ordering: .relaxed) }
                 // Sequence and time advance even for a dropped packet: to the receiver it's simply lost.
                 sequence &+= 1
                 sampleTime &+= UInt64(framesPerPacket)

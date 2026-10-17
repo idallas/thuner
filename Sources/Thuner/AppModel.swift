@@ -938,7 +938,8 @@ final class AppModel {
         // the start of the record goes missing on the other Mac.
         if streamSender.idle, db >= thresholdDB {
             streamSender.idle = false
-            silentSince = nil
+            // Count silence again from now: a lone pop that never opens the gate mustn't keep the stream awake.
+            silentSince = Date()
         }
         switch gate.feed(levelDB: db, at: now) {
         case .opened:

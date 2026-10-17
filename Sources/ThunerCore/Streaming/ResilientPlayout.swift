@@ -12,16 +12,22 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
     /// The least extra buffer to keep beyond what the jitter calls for.
     public let minimumFrames: Int
 
-    private let capacity = 32_768
+    /// Frames held: 2.7 s at 48 kHz, so even at 192 kHz it's well over twice the largest buffer (0.25 s).
+    private let capacity = 131_072
     private let buffer: UnsafeMutablePointer<Float>
     /// The sender frame each slot holds, so a slot from a lost packet (or a lap ago) reads as missing.
-    private let stamps: UnsafeMutablePointer<UInt64>
+    private let stamps: UnsafeMutablePointer<Int64>
 
     private var streamID: UInt16?
     private var sampleRate = 48_000.0
     private var packetFrames = 128
     /// One past the newest frame received.
-    private var newestEnd: UInt64 = 0
+    private var newestEnd: Int64 = 0
+    /// The stream's first sample time: every position here is an offset from it, so whatever a packet's 64-bit
+    /// sample time says, the arithmetic stays small.
+    private var origin: UInt64?
+    /// Furthest a packet may sit from the newest audio, either way, and still be placed (2 buffer lengths).
+    private var placeable: Int64 { Int64(capacity / 2) }
     /// Where playback is, in the sender's frames; nil until there's something to play.
     private var readPosition: Double?
     /// Output frames rendered since the last packet arrived.
@@ -76,7 +82,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
         buffer = .allocate(capacity: capacity * 2)
         buffer.initialize(repeating: 0, count: capacity * 2)
         stamps = .allocate(capacity: capacity)
-        stamps.initialize(repeating: .max, count: capacity)
+        stamps.initialize(repeating: .min, count: capacity)
         local.method = .resilient
     }
 
@@ -111,8 +117,9 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
             streamID = header.streamID
             sampleRate = Double(header.sampleRate)
             newestEnd = 0
+            origin = nil
             readPosition = nil
-            stamps.update(repeating: .max, count: capacity)
+            stamps.update(repeating: .min, count: capacity)
             blockStart = -.infinity
             currentMin = .infinity
             previousMin = .infinity
@@ -123,8 +130,11 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
             local.sampleRate = sampleRate
         }
         packetFrames = header.frames
-        let start = header.sampleTime
-        let end = start + UInt64(header.frames)
+        if origin == nil { origin = header.sampleTime }
+        let start = Int64(bitPattern: header.sampleTime &- origin!)
+        // Nowhere near the stream (the gate in front should have caught it): ignore rather than jump.
+        guard start >= 0, newestEnd == 0 || abs(start - newestEnd) <= placeable else { return }
+        let end = start + Int64(header.frames)
         // A resend is a round trip late by design; counting it as jitter would grow the buffer for nothing.
         if !header.resent { trackJitter(transit: arrival - Double(start) / sampleRate, arrival: arrival) }
         if firstArrival == nil { firstArrival = arrival }
@@ -142,8 +152,8 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
             }
         }
         for i in 0..<header.frames {
-            let frame = start + UInt64(i)
-            let slot = Int(frame % UInt64(capacity))
+            let frame = start + Int64(i)
+            let slot = Int(frame % Int64(capacity))
             buffer[slot * 2] = samples[i * 2]
             buffer[slot * 2 + 1] = samples[i * 2 + 1]
             stamps[slot] = frame
@@ -160,7 +170,8 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
         } else {
             currentMin = min(currentMin, transit)
         }
-        let lateness = max(0, transit - min(previousMin, currentMin))
+        // No more than the buffer could ever hold for it (one odd packet can't pin the buffer at its maximum).
+        let lateness = min(max(0, transit - min(previousMin, currentMin)), 0.25)
         // Jump up to any new peak and hold it for 5 seconds (Wi-Fi hiccups tend to come back), then let it decay
         // with a 5 second half-life.
         if lateness >= peakLateness {
@@ -240,7 +251,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
             } else {
                 if !wasMissing {
                     // Past the newest audio: the buffer ran dry. Behind it: a packet that never came.
-                    if base + 2 >= Int64(newestEnd) {
+                    if base + 2 >= newestEnd {
                         local.underruns += 1
                         resync = true
                     } else {
@@ -270,7 +281,7 @@ public final class ResilientPlayout: Playout, @unchecked Sendable {
     private func sample(_ frame: Int64, _ l: inout Float, _ r: inout Float, _ present: inout Bool) {
         if frame >= 0 {
             let slot = Int(frame % Int64(capacity))
-            if stamps[slot] == UInt64(frame) {
+            if stamps[slot] == frame {
                 l = buffer[slot * 2]
                 r = buffer[slot * 2 + 1]
                 return
