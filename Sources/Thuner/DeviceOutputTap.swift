@@ -69,9 +69,10 @@ final class DeviceOutputTap {
     func start() throws {
         guard let proc else { return }
         DeviceInputTap.setStreamUsage(device: device, proc: proc, scope: kAudioDevicePropertyScopeInput, enabled: false)
+        // Before starting, so the first buffers are already small (switching after start cost a dropout).
+        ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
         let status = AudioDeviceStart(device, proc)
         guard status == noErr else { throw DeviceInputTap.TapError.coreAudio("start the output", status) }
-        ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
         latencyFrames = AudioDevices.latencyFrames(device, scope: kAudioDevicePropertyScopeOutput) + ioBufferFrames
     }
 

@@ -98,7 +98,7 @@ final class AppModel {
     var selectedStreamOutput: AudioInputDevice? {
         outputDevices.first { $0.uid == streamOutputUID }
     }
-    static let streamThisMac = "This Mac"
+    nonisolated static let streamThisMac = "This Mac"
     /// The stream password (both Macs need the same one): seals and encrypts everything between them. Kept in the
     /// Keychain; empty for none.
     var streamPassword: String {
@@ -616,6 +616,16 @@ final class AppModel {
         selectedDevice.flatMap { inputName($0, first: firstChannel) }
     }
 
+    /// How another Mac's name is shown. `open Thuner.app --args -peerDisplayName "Mac mini"` shows every other
+    /// Mac under that name instead, for screenshots that shouldn't carry real machine names. Display only:
+    /// settings and connections use the real names.
+    nonisolated static func shown(_ host: String) -> String {
+        guard host != streamThisMac,
+              let alias = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["peerDisplayName"] as? String,
+              !alias.isEmpty else { return host }
+        return alias
+    }
+
     /// A channel pair for pickers: its name with the channels ("Turntable (3–4)"), or the plain label.
     func pairLabel(_ device: AudioInputDevice, _ pair: (first: Int, label: String)) -> String {
         guard let name = inputName(device, first: pair.first) else { return pair.label }
@@ -961,7 +971,7 @@ final class AppModel {
             MainActor.assumeIsolated {
                 guard let self, let receiver, receiver === self.streamReceiver else { return }
                 self.streamSenderStatus = receiver.status
-                let other = receiver.status?.host ?? self.streamSource
+                let other = Self.shown(receiver.status?.host ?? self.streamSource)
                 self.streamProblem = receiver.error ?? {
                     switch receiver.status?.password {
                     case .needed: return "\(other) has a stream password, and this Mac's is missing or different"

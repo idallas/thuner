@@ -663,10 +663,10 @@ private struct StreamingSettings: View {
             Section {
                 Picker("Listen to", selection: $model.streamSource) {
                     Text("Off").tag("")
-                    ForEach(model.otherThuners, id: \.self) { Text($0).tag($0) }
+                    ForEach(model.otherThuners, id: \.self) { Text(AppModel.shown($0)).tag($0) }
                     if !model.streamSource.isEmpty, model.streamSource != AppModel.streamThisMac,
                        !model.otherThuners.contains(model.streamSource) {
-                        Text("\(model.streamSource) (not found)").tag(model.streamSource)
+                        Text("\(AppModel.shown(model.streamSource)) (not found)").tag(model.streamSource)
                     }
                     Divider()
                     Text("This Mac (test)").tag(AppModel.streamThisMac)
@@ -706,7 +706,7 @@ private struct StreamingSettings: View {
     private var streamDetails: String? {
         guard let stats = model.streamStats else { return nil }
         var parts: [String] = []
-        if let status = model.streamSenderStatus, status.sharing { parts.append("\(status.source ?? "?") on \(status.host)") }
+        if let status = model.streamSenderStatus, status.sharing { parts.append("\(status.source ?? "?") on \(AppModel.shown(status.host))") }
         parts.append("\(Self.rate(stats.sampleRate)) 24-bit")
         if stats.method == .resilient { parts.append(String(format: "jitter %.1f ms", stats.jitterMs)) }
         parts.append(String(format: "clocks %+.0f ppm", stats.driftPPM))

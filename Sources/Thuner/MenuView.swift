@@ -110,7 +110,7 @@ struct MenuView: View {
                         Text(album).font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(1)
                     }
                     if model.peerHasControl, let host = model.remote?.host {
-                        Label("Playing on \(host)", systemImage: "opticaldisc")
+                        Label("Playing on \(AppModel.shown(host))", systemImage: "opticaldisc")
                             .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 4)
                     } else if let entry = currentEntry {
                         playMeta(entry).padding(.top, 4)
@@ -118,7 +118,7 @@ struct MenuView: View {
                 } else {
                     if model.peerHasControl, let host = model.remote?.host {
                         Text("Identifying…").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                        Text("\(host) hears music").font(.system(size: 12)).foregroundStyle(.tertiary)
+                        Text("\(AppModel.shown(host)) hears music").font(.system(size: 12)).foregroundStyle(.tertiary)
                     } else {
                         Text("Nothing playing").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                         Text(model.pausedManually ? "Listening is paused" : "Listening for music")
@@ -247,7 +247,7 @@ struct MenuView: View {
                 Spacer()
                 Button("Resume") { model.togglePause() }.controlSize(.small)
             case .peer(let host):
-                Text("\(host) is playing, so this Mac is standing by.")
+                Text("\(AppModel.shown(host)) is playing, so this Mac is standing by.")
                 Spacer()
                 Button("Listen Here") { model.listenHereAnyway() }
                     .controlSize(.small)
@@ -272,8 +272,9 @@ struct MenuView: View {
 
     @ViewBuilder
     private var alerts: some View {
-        if model.role == .secondary, !model.arbiterAllowsPush {
-            Label("Deferring to \(model.lastPrimaryPeer ?? "the turntable Mac")", systemImage: "hand.raised")
+        // (While standing by for the turntable Mac, the line above already says so.)
+        if model.role == .secondary, !model.arbiterAllowsPush, !model.peerHasControl {
+            Label("Deferring to \(model.lastPrimaryPeer.map(AppModel.shown) ?? "the turntable Mac")", systemImage: "hand.raised")
                 .font(.system(size: 11)).foregroundStyle(.orange)
         }
         if model.hasPermissionProblem {
@@ -339,7 +340,7 @@ struct MenuView: View {
     }
 
     private var stateDetail: String? {
-        if model.peerHasControl { return model.remote?.host }
+        if model.peerHasControl { return model.remote.map { AppModel.shown($0.host) } }
         if let player = model.activePlayer { return player.source.rawValue }
         return model.machine.state == .playing ? "Shazam" : nil
     }

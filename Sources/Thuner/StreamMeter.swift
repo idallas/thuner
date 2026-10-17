@@ -88,7 +88,7 @@ struct StreamMeter: View {
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 4) {
-                    Text(model.streamSource == AppModel.streamThisMac ? "This Mac" : model.streamSource)
+                    Text(model.streamSource == AppModel.streamThisMac ? "This Mac" : AppModel.shown(model.streamSource))
                     Spacer()
                     Text(summary).monospacedDigit().foregroundStyle(.secondary)
                 }
@@ -102,16 +102,16 @@ struct StreamMeter: View {
             }
         }
         .allowsHitTesting(false)
-        .help(model.streamProblem ?? "Listening to \(model.streamSource)'s stream. Details in Settings → Streaming.")
+        .help(model.streamProblem ?? "Listening to \(AppModel.shown(model.streamSource))'s stream. Details in Settings → Streaming.")
     }
 
     private var sourceName: String {
-        model.streamSource == AppModel.streamThisMac ? "Input" : model.streamSource
+        model.streamSource == AppModel.streamThisMac ? "Input" : AppModel.shown(model.streamSource)
     }
 
     private func levelPair(_ name: String, _ levels: AppModel.Stereo?) -> some View {
         HStack(spacing: 4) {
-            Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).frame(width: 34, alignment: .leading)
+            Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
             StereoLevelMeter(levels: levels).frame(height: 7)
         }
     }
@@ -121,8 +121,10 @@ struct StreamMeter: View {
         if model.streamQuiet { return "Nothing playing" }
         guard let stats = feed.stats, stats.playing else { return "Waiting for audio" }
         let latency = feed.latency.map { String(format: "≈ %.0f ms", $0.totalMs) } ?? String(format: "%.1f ms buffer", feed.bufferMs)
-        let missing = stats.underruns + stats.lost
-        return missing > 0 ? "\(latency) · \(missing) dropouts" : latency
+        // Only recent ones (the graph's 30 seconds): a count since the stream began only ever grows, and looks
+        // alarming hours in even when all's well. Settings → Streaming has the total.
+        let missing = feed.history.filter(\.dropout).count
+        return missing > 0 ? "\(latency) · \(missing) dropout\(missing == 1 ? "" : "s") lately" : latency
     }
 
     // MARK: Settings
@@ -138,7 +140,7 @@ struct StreamMeter: View {
                 }
                 LatencyBar(latency: latency)
             } else if model.streamQuiet {
-                Text("Nothing's playing on \(model.streamSource), so the output is closed. It opens again when audio comes back.")
+                Text("Nothing's playing on \(AppModel.shown(model.streamSource)), so the output is closed. It opens again when audio comes back.")
                     .foregroundStyle(.secondary)
             } else if feed.stats == nil || feed.stats?.playing == false {
                 Text("Waiting for audio…").foregroundStyle(.secondary)

@@ -96,10 +96,10 @@ final class DeviceInputTap {
     func start() throws {
         guard let proc else { return }
         Self.setStreamUsage(device: device, proc: proc, scope: kAudioDevicePropertyScopeOutput, enabled: false)
+        // Before starting, so the first buffers are already the size asked for.
+        ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
         let status = AudioDeviceStart(device, proc)
         guard status == noErr else { throw TapError.coreAudio("start the input", status) }
-        // After starting, so nothing else in this process sets it back.
-        ioBufferFrames = AudioCapture.setIOBufferFrames(requestedIOFrames, device: device)
         // The newest frame in each buffer is a buffer late already; then a packet may wait for the next buffer.
         let packet = packetizer?.framesPerPacket ?? 0
         latencyFrames = AudioDevices.latencyFrames(device, scope: kAudioDevicePropertyScopeInput) + ioBufferFrames
