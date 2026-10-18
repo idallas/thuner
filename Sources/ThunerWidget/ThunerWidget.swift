@@ -6,20 +6,6 @@ import WidgetKit
 // http://127.0.0.1:47480/now.json (the web display's feed), so it needs nothing shared with the app but the network
 // client entitlement; ThUNER asks WidgetKit to reload it whenever the track changes.
 
-struct NowPlayingEntry: TimelineEntry {
-    var date: Date
-    var title: String?
-    var artist: String?
-    var album: String?
-    var source: String?
-    var cover: NSImage?
-    /// Nothing from ThUNER (it's not running, or its web display is off).
-    var unreachable = false
-
-    static let sample = NowPlayingEntry(date: .now, title: "Swung from the Gutters", artist: "Tortoise", album: "TNT",
-                                        source: "Mac mini")
-}
-
 private struct NowPlayingJSON: Decodable {
     var state: String
     var title: String?
@@ -61,92 +47,24 @@ struct NowPlayingProvider: TimelineProvider {
     }
 }
 
-struct NowPlayingView: View {
-    var entry: NowPlayingEntry
-    @Environment(\.widgetFamily) private var family
-
-    var body: some View {
-        Group {
-            if entry.title == nil {
-                idle
-            } else if family == .systemSmall {
-                small
-            } else {
-                wide
-            }
-        }
-        .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-    }
-
-    private var cover: some View {
-        Group {
-            if let image = entry.cover {
-                Image(nsImage: image).resizable().aspectRatio(1, contentMode: .fill)
-            } else {
-                ZStack {
-                    Rectangle().fill(.quaternary)
-                    Image(systemName: "opticaldisc").font(.system(size: 28)).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private var small: some View {
-        ZStack(alignment: .bottomLeading) {
-            cover
-            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(entry.title ?? "").font(.caption.weight(.semibold)).lineLimit(1)
-                Text(entry.artist ?? "").font(.caption2).lineLimit(1).opacity(0.85)
-            }
-            .foregroundStyle(.white)
-            .padding(8)
-        }
-    }
-
-    private var wide: some View {
-        HStack(spacing: 12) {
-            cover
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title ?? "").font(.headline).lineLimit(2)
-                Text(entry.artist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                if let album = entry.album, family != .systemSmall {
-                    Text(album).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if let source = entry.source {
-                    Label(source, systemImage: "waveform").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var idle: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "opticaldisc").font(.system(size: 26)).foregroundStyle(.secondary)
-            Text(entry.unreachable ? "Can't reach ThUNER" : "Nothing playing")
-                .font(.caption).foregroundStyle(.secondary)
-            if entry.unreachable {
-                // It reads the web display's feed.
-                Text("Is it running, with its web display on?").font(.caption2).foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-    }
-}
-
 struct NowPlayingWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "NowPlaying", provider: NowPlayingProvider()) { entry in
-            NowPlayingView(entry: entry)
+            FamilyReader { NowPlayingView(entry: entry, family: $0) }
         }
+        // The small and large layouts run the cover to the edges; the medium one pads itself.
+        .contentMarginsDisabled()
         .configurationDisplayName("Now Playing")
         .description("What ThUNER hears or follows, with its cover.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
+}
+
+/// Hands the view the widget's size (kept out of the view, so previews can pass any).
+private struct FamilyReader<Content: View>: View {
+    @Environment(\.widgetFamily) private var family
+    @ViewBuilder var content: (WidgetFamily) -> Content
+    var body: some View { content(family) }
 }
 
 @main
