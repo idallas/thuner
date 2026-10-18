@@ -41,7 +41,8 @@ struct HistoryView: View {
                 TableColumn("Title") { e in Text(e.track.title) }
                 TableColumn("Album") { e in Text(e.track.album ?? "").foregroundStyle(.secondary) }
                 TableColumn("Source") { e in
-                    Label(e.source.rawValue, systemImage: Self.symbol(for: e.source)).labelStyle(.titleAndIcon)
+                    Label(e.source == .anotherMac ? AppModel.shown(e.sourceName) : e.sourceName,
+                          systemImage: Self.symbol(for: e.source)).labelStyle(.titleAndIcon)
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 110, max: 140)
@@ -133,7 +134,7 @@ struct HistoryView: View {
                 .map(model.scrobbleServiceName).sorted().joined(separator: "; ")
             lines.append([
                 iso.string(from: e.startedAt), field(e.track.artist), field(e.track.title), field(e.track.album),
-                e.source.rawValue, field(scrobbledTo),
+                field(e.sourceName), field(scrobbledTo),
                 e.track.appleMusicID.map { "https://music.apple.com/song/\($0)" } ?? "",
                 e.track.spotifyID.map { "https://open.spotify.com/track/\($0)" } ?? "",
             ].joined(separator: ","))
@@ -160,6 +161,7 @@ struct HistoryView: View {
         case .shazam: "shazam.logo"
         case .appleMusic: "music.note"
         case .spotify: "dot.radiowaves.left.and.right"
+        case .anotherMac: "opticaldisc"
         }
     }
 }

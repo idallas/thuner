@@ -81,3 +81,39 @@ private let song = Track(title: "Sons of Thunder", artist: "High On Fire", durat
         #expect(RemoteScrobble.duplicate(of: song, startedAt: at(2000), in: recent) == nil)
     }
 }
+
+@Suite struct AnotherMacHistoryTests {
+    @Test func theTurntableMacsPlaysAreRecordedOnceWithItsName() {
+        var history = PlayHistory()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        // A push, then heartbeats every 30 seconds carrying the same track.
+        for i in 0..<5 { history.record(song, startedAt: start.addingTimeInterval(Double(i) * 30), source: .anotherMac, host: "turntable") }
+        #expect(history.entries.count == 1)
+        #expect(history.entries[0].sourceName == "turntable")
+        #expect(history.entries[0].startedAt == start)
+    }
+
+    @Test func itsReportOutranksShazamHereButNotAPlayer() {
+        var history = PlayHistory()
+        let start = Date(timeIntervalSince1970: 2_000_000)
+        history.record(song, startedAt: start, source: .shazam)
+        history.record(song, startedAt: start.addingTimeInterval(20), source: .anotherMac, host: "turntable")
+        #expect(history.entries.count == 1)
+        #expect(history.entries[0].source == .anotherMac)
+        history.record(song, startedAt: start.addingTimeInterval(40), source: .spotify)
+        #expect(history.entries[0].source == .spotify)
+        #expect(history.entries[0].host == nil)
+        history.record(song, startedAt: start.addingTimeInterval(60), source: .anotherMac, host: "turntable")
+        #expect(history.entries[0].source == .spotify)
+    }
+
+    @Test func historyWithoutHostsStillLoads() throws {
+        var history = PlayHistory()
+        history.record(song, startedAt: Date(timeIntervalSince1970: 3_000_000), source: .shazam)
+        let saved = try JSONEncoder().encode(history)
+        #expect(!String(decoding: saved, as: UTF8.self).contains("host"))
+        let loaded = try JSONDecoder().decode(PlayHistory.self, from: saved)
+        #expect(loaded == history)
+        #expect(loaded.entries[0].sourceName == "Shazam")
+    }
+}

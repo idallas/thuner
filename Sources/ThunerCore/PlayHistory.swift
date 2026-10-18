@@ -6,6 +6,19 @@ public struct PlayHistory: Codable, Equatable, Sendable {
         case shazam = "Shazam"
         case appleMusic = "Apple Music"
         case spotify = "Spotify"
+        /// Played on another Mac's ThUNER (the turntable Mac), which said so over the network. `Entry.host` says
+        /// which.
+        case anotherMac = "Another Mac"
+
+        /// How much to trust a report of what's playing: a player knows; the turntable Mac heard the record
+        /// itself; Shazam here may have heard it through the speakers.
+        var trust: Int {
+            switch self {
+            case .shazam: 0
+            case .anotherMac: 1
+            case .appleMusic, .spotify: 2
+            }
+        }
     }
 
     public enum ScrobbleStatus: Codable, Equatable, Sendable {
@@ -23,17 +36,24 @@ public struct PlayHistory: Codable, Equatable, Sendable {
         public var track: Track
         public var startedAt: Date
         public var source: Source
+        /// For `.anotherMac`: its name.
+        public var host: String?
         /// What happened at each scrobbling service, keyed by service id ("lastfm", or a ListenBrainz-style
         /// service's UUID).
         public var scrobbles: [String: ScrobbleStatus]
 
-        public init(id: UUID = UUID(), track: Track, startedAt: Date, source: Source, scrobbles: [String: ScrobbleStatus] = [:]) {
+        public init(id: UUID = UUID(), track: Track, startedAt: Date, source: Source, host: String? = nil,
+                    scrobbles: [String: ScrobbleStatus] = [:]) {
             self.id = id
             self.track = track
             self.startedAt = startedAt
             self.source = source
+            self.host = host
             self.scrobbles = scrobbles
         }
+
+        /// Where it was played, for display: the app, Shazam, or the other Mac's name.
+        public var sourceName: String { source == .anotherMac ? host ?? source.rawValue : source.rawValue }
 
         /// One status for the whole play: scrobbled if any service took it, else queued, else a duplicate.
         public var scrobble: ScrobbleStatus {
@@ -43,7 +63,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
             return all.first { if case .skippedDuplicate = $0 { true } else { false } } ?? .notSent
         }
 
-        private enum CodingKeys: String, CodingKey { case id, track, startedAt, source, scrobbles, scrobble }
+        private enum CodingKeys: String, CodingKey { case id, track, startedAt, source, host, scrobbles, scrobble }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -51,6 +71,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
             track = try c.decode(Track.self, forKey: .track)
             startedAt = try c.decode(Date.self, forKey: .startedAt)
             source = try c.decode(Source.self, forKey: .source)
+            host = try c.decodeIfPresent(String.self, forKey: .host)
             if let all = try c.decodeIfPresent([String: ScrobbleStatus].self, forKey: .scrobbles) {
                 scrobbles = all
             } else {
@@ -66,6 +87,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
             try c.encode(track, forKey: .track)
             try c.encode(startedAt, forKey: .startedAt)
             try c.encode(source, forKey: .source)
+            try c.encodeIfPresent(host, forKey: .host)
             try c.encode(scrobbles, forKey: .scrobbles)
         }
     }
@@ -87,7 +109,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
     /// Records a play and returns its entry id. A play that's already recorded is updated instead (filling in
     /// album, artwork and length if the new report has them), so the history has one row per play.
     @discardableResult
-    public mutating func record(_ track: Track, startedAt: Date, source: Source) -> UUID {
+    public mutating func record(_ track: Track, startedAt: Date, source: Source, host: String? = nil) -> UUID {
         if let i = indexOfSamePlay(track, startedAt: startedAt) {
             var t = entries[i].track
             t.album = t.album ?? track.album
@@ -96,11 +118,14 @@ public struct PlayHistory: Codable, Equatable, Sendable {
             t.appleMusicID = t.appleMusicID ?? track.appleMusicID
             t.spotifyID = t.spotifyID ?? track.spotifyID
             entries[i].track = t
-            // A player's report is more trustworthy than Shazam's.
-            if entries[i].source == .shazam, source != .shazam { entries[i].source = source }
+            // A player's report is more trustworthy than Shazam's, and the turntable Mac's more than this Mac's ears.
+            if source.trust > entries[i].source.trust {
+                entries[i].source = source
+                entries[i].host = host
+            }
             return entries[i].id
         }
-        let entry = Entry(track: track, startedAt: startedAt, source: source)
+        let entry = Entry(track: track, startedAt: startedAt, source: source, host: host)
         entries.append(entry)
         if entries.count > Self.maxEntries { entries.removeFirst(entries.count - Self.maxEntries) }
         return entry.id

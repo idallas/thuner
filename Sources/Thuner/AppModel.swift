@@ -1700,6 +1700,13 @@ final class AppModel {
         case .active, .push:
             arbiter.primaryWasActive(at: Date())
             remote = RemoteNowPlaying(host: message.host, track: message.nowPlaying, updatedAt: Date())
+            // The turntable Mac's plays go in this Mac's history too (it scrobbles them itself, if it does).
+            // Repeats of the same play (every heartbeat carries it) just update its row.
+            if let track = message.nowPlaying {
+                let before = history
+                history.record(track, startedAt: Date(), source: .anotherMac, host: message.host)
+                if history != before { saveHistory() }
+            }
             if !hadControl, peerHasControl { note("\(message.host) is playing; pausing here") }
             if message.event == .push { note("\(message.host) is showing \(message.track ?? "a track")") }
         }
