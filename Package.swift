@@ -20,7 +20,9 @@ let package = Package(
         .executableTarget(
             name: "ThunerWidget",
             swiftSettings: [.unsafeFlags(["-application-extension"])],
-            linkerSettings: [.unsafeFlags(["-Xlinker", "-application_extension"])]),
+            // Start at Foundation's _NSExtensionMain, as Xcode links every app extension: it sets up the extension
+            // runtime before handing over to the widget bundle (starting at main crashes in ExtensionFoundation).
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-application_extension", "-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"])]),
         .testTarget(name: "ThunerCoreTests", dependencies: ["ThunerCore"]),
     ],
     swiftLanguageModes: [.v5]
