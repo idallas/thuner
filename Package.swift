@@ -16,6 +16,11 @@ let package = Package(
             dependencies: ["ThunerCore", .product(name: "Sparkle", package: "Sparkle")],
             // Sparkle.framework is copied into Contents/Frameworks by Scripts/build-app.sh.
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+        // The widget (WidgetKit extension), packaged into Contents/PlugIns/ThunerWidget.appex by Scripts/build-app.sh.
+        .executableTarget(
+            name: "ThunerWidget",
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-application_extension"])]),
         .testTarget(name: "ThunerCoreTests", dependencies: ["ThunerCore"]),
     ],
     swiftLanguageModes: [.v5]

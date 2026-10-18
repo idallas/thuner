@@ -16,6 +16,7 @@ ARCHS=(--arch arm64 --arch x86_64)
 if [[ ${TIMESTAMP:-0} == 1 ]]; then STAMP=(--timestamp); else STAMP=(--timestamp=none); fi
 
 swift build -c release --product Thuner $ARCHS
+swift build -c release --product ThunerWidget $ARCHS
 BIN_DIR=$(swift build -c release --show-bin-path $ARCHS)
 
 rm -rf "$APP"
@@ -77,6 +78,29 @@ fi
 # ditto keeps the framework's symlinks intact.
 ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
+# The widget: a WidgetKit extension, versioned like the app, with its ID under the app's.
+WIDGET="$APP/Contents/PlugIns/ThunerWidget.appex"
+mkdir -p "$WIDGET/Contents/MacOS"
+cp "$BIN_DIR/ThunerWidget" "$WIDGET/Contents/MacOS/ThunerWidget"
+python3 - "$APP/Contents/Info.plist" "$WIDGET/Contents/Info.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as f: app = plistlib.load(f)
+widget = {
+    "CFBundleDevelopmentRegion": "en",
+    "CFBundleDisplayName": "ThUNER",
+    "CFBundleExecutable": "ThunerWidget",
+    "CFBundleIdentifier": app["CFBundleIdentifier"] + ".widget",
+    "CFBundleInfoDictionaryVersion": "6.0",
+    "CFBundleName": "ThunerWidget",
+    "CFBundlePackageType": "XPC!",
+    "CFBundleShortVersionString": app["CFBundleShortVersionString"],
+    "CFBundleVersion": app["CFBundleVersion"],
+    "LSMinimumSystemVersion": app.get("LSMinimumSystemVersion", "15.0"),
+    "NSExtension": {"NSExtensionPointIdentifier": "com.apple.widgetkit-extension"},
+}
+with open(sys.argv[2], "wb") as f: plistlib.dump(widget, f)
+PY
+
 # Sign inside-out, as Sparkle's docs prescribe for a Developer ID app (no --deep).
 sign() { codesign --force --options runtime $STAMP --sign "$SIGN_IDENTITY" "$@"; }
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
@@ -85,6 +109,8 @@ sign --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloade
 sign "$SPARKLE/Versions/B/Autoupdate"
 sign "$SPARKLE/Versions/B/Updater.app"
 sign "$SPARKLE"
+# Widget extensions must be sandboxed; it only needs to reach ThUNER's own http://127.0.0.1:47480.
+sign --entitlements Resources/ThunerWidget.entitlements "$WIDGET"
 sign --entitlements Resources/Thuner.entitlements "$APP"
 
 codesign --verify --deep --strict --verbose=1 "$APP"

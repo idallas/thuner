@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import Observation
 import ServiceManagement
+import WidgetKit
 import ThunerCore
 import os
 
@@ -1100,7 +1101,13 @@ final class AppModel {
             applyFloatingCover()
         }
         stepIconLevel(at: now)
-        if webDisplayEnabled { webDisplay.update(webNowPlaying) }
+        let shown = webNowPlaying
+        if webDisplayEnabled { webDisplay.update(shown) }
+        // The widget reads /now.json; tell it to when what's shown changes.
+        if shown != lastWidgetState {
+            lastWidgetState = shown
+            WidgetCenter.shared.reloadAllTimelines()
+        }
         controls.refresh(at: now)
 
         if let track = deferredPush, canPush(at: now) {
@@ -1179,6 +1186,8 @@ final class AppModel {
     }
 
     /// What the web display shows: the same track as the panel, including the turntable Mac's.
+    @ObservationIgnored private var lastWidgetState: WebDisplayServer.NowPlaying?
+
     private var webNowPlaying: WebDisplayServer.NowPlaying {
         var now = WebDisplayServer.NowPlaying()
         let track = shownTrack
