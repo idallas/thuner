@@ -106,6 +106,41 @@ struct SetRadioModeIntent: AppIntent {
     }
 }
 
+// MARK: Playback (Apple Music and Spotify)
+
+struct PlayPauseIntent: AppIntent {
+    static let title: LocalizedStringResource = "Play or Pause"
+    static let description = IntentDescription("Plays or pauses Apple Music or Spotify, whichever ThUNER is following. macOS asks once whether ThUNER may control each app.")
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        .result(value: await (try await thuner()).playbackResult(.playPause))
+    }
+}
+
+struct NextTrackIntent: AppIntent {
+    static let title: LocalizedStringResource = "Next Track"
+    static let description = IntentDescription("Skips to the next track in Apple Music or Spotify, whichever ThUNER is following.")
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        .result(value: await (try await thuner()).playbackResult(.next))
+    }
+}
+
+struct PreviousTrackIntent: AppIntent {
+    static let title: LocalizedStringResource = "Previous Track"
+    static let description = IntentDescription("Goes back a track in Apple Music or Spotify, whichever ThUNER is following.")
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        .result(value: await (try await thuner()).playbackResult(.previous))
+    }
+}
+
 // MARK: Display
 
 struct ClearTuneshineIntent: AppIntent {

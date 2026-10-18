@@ -41,6 +41,9 @@ final class ControlSurface {
         .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
         .init(id: "nowPlaying", name: "Now Playing", kind: .level, group: "Now Playing", readOnly: true),
         .init(id: "radio", name: "Radio Mode", kind: .toggle, group: "Now Playing"),
+        .init(id: "playPause", name: "Play/Pause", kind: .button, group: "Playback"),
+        .init(id: "nextTrack", name: "Next Track", kind: .button, group: "Playback"),
+        .init(id: "previousTrack", name: "Previous Track", kind: .button, group: "Playback"),
         .init(id: "brightness", name: "Tuneshine Brightness", kind: .level, group: "Display"),
         .init(id: "clear", name: "Clear Tuneshine", kind: .button, group: "Display"),
         .init(id: "floatingCover", name: "Floating Cover", kind: .toggle, group: "Display"),
@@ -93,6 +96,9 @@ final class ControlSurface {
         case "listenHere": if model.peerHasControl { model.listenHereAnyway() }
         case "radio": model.radioMode.toggle()
         case "clear": model.clearDisplay()
+        case "playPause": model.playback(.playPause)
+        case "nextTrack": model.playback(.next)
+        case "previousTrack": model.playback(.previous)
         case "floatingCover": model.showFloatingCover.toggle()
         default: return .unknownControl
         }

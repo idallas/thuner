@@ -1,3 +1,4 @@
+import AppIntents
 import AppKit
 import SwiftUI
 import WidgetKit
@@ -9,6 +10,9 @@ struct NowPlayingEntry: TimelineEntry {
     var album: String?
     var source: String?
     var cover: NSImage?
+    /// The player ThUNER's playback controls act on (Apple Music or Spotify), and whether it's paused.
+    var player: String?
+    var paused = false
     /// Nothing from ThUNER (it's not running, or its web display is off).
     var unreachable = false
 
@@ -60,10 +64,15 @@ struct NowPlayingView: View {
                 if let album = entry.album {
                     Text(album).font(.system(size: 14)).lineLimit(2).minimumScaleFactor(0.75).opacity(0.75)
                 }
-                if let source = entry.source {
-                    Label(source, systemImage: "waveform").font(.system(size: 11, weight: .medium))
-                        .lineLimit(1).opacity(0.7).padding(.top, 4)
+                HStack(alignment: .bottom) {
+                    if let source = entry.source {
+                        Label(source, systemImage: "waveform").font(.system(size: 11, weight: .medium))
+                            .lineLimit(1).opacity(0.7)
+                    }
+                    Spacer(minLength: 8)
+                    if entry.player != nil { controls(size: 15) }
                 }
+                .padding(.top, 4)
             }
         }
         .foregroundStyle(.white)
@@ -94,14 +103,31 @@ struct NowPlayingView: View {
                     Text(album).font(.system(size: 12)).foregroundStyle(.tertiary).lineLimit(2).minimumScaleFactor(0.75)
                 }
                 Spacer(minLength: 4)
-                if let source = entry.source {
-                    Label(source, systemImage: "waveform").font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary).lineLimit(1)
+                HStack(alignment: .center) {
+                    if let source = entry.source {
+                        Label(source, systemImage: "waveform").font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    if entry.player != nil { controls(size: 12).foregroundStyle(.primary) }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(14)
+    }
+
+    /// Previous, play/pause, next (only when ThUNER is following Apple Music or Spotify).
+    private func controls(size: CGFloat) -> some View {
+        HStack(spacing: size * 0.9) {
+            Button(intent: WidgetPlaybackIntent("previousTrack")) { Image(systemName: "backward.fill") }
+            Button(intent: WidgetPlaybackIntent("playPause")) {
+                Image(systemName: entry.paused ? "play.fill" : "pause.fill").font(.system(size: size * 1.3))
+            }
+            Button(intent: WidgetPlaybackIntent("nextTrack")) { Image(systemName: "forward.fill") }
+        }
+        .font(.system(size: size, weight: .semibold))
+        .buttonStyle(.plain)
     }
 
     private var cover: some View {

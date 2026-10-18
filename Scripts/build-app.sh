@@ -55,26 +55,31 @@ fi
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 
-# Shortcuts actions: the Shortcuts app finds them through Metadata.appintents, which Xcode generates from the
-# compiler's constant values and SwiftPM doesn't. Run that step here (the metadata doesn't depend on the arch).
-INTERMEDIATES=.build/out/Intermediates.noindex/Thuner.build/Release/Thuner-p.build/Objects-normal/arm64
-if [[ -f $INTERMEDIATES/Thuner.SwiftFileList ]] && ls $INTERMEDIATES/*.swiftconstvalues >/dev/null 2>&1; then
-  CONSTS=$(mktemp)
-  ls $PWD/$INTERMEDIATES/*.swiftconstvalues > "$CONSTS"
+# Shortcuts actions and the widget's buttons: the system finds App Intents through Metadata.appintents, which Xcode
+# generates from the compiler's constant values and SwiftPM doesn't. Run that step here, for the app and for the
+# widget (the metadata doesn't depend on the arch).
+appintents_metadata() {  # <module> <output folder>
+  local inter=.build/out/Intermediates.noindex/Thuner.build/Release/$1-p.build/Objects-normal/arm64
+  if [[ ! -f $inter/$1.SwiftFileList ]] || ! ls $inter/*.swiftconstvalues >/dev/null 2>&1; then
+    echo "warning: no compiler constant values for $1; its App Intents won't be found" >&2
+    return
+  fi
+  local consts=$(mktemp)
+  ls $PWD/$inter/*.swiftconstvalues > "$consts"
+  mkdir -p "$2"
   xcrun appintentsmetadataprocessor --quiet-warnings \
-    --output "$APP/Contents/Resources" \
+    --output "$2" \
     --toolchain-dir "$(xcrun --find swift | sed 's|/usr/bin/swift$||')" \
-    --module-name Thuner \
+    --module-name "$1" \
     --sdk-root "$(xcrun --sdk macosx --show-sdk-path)" \
     --xcode-version "$(xcodebuild -version | awk '/Build version/{print $3}')" \
     --platform-family macOS --deployment-target 15.0 --target-triple arm64-apple-macos15.0 \
-    --source-file-list "$INTERMEDIATES/Thuner.SwiftFileList" \
-    --swift-const-vals-list "$CONSTS" >/dev/null
-  rm -f "$CONSTS"
-  [[ -d "$APP/Contents/Resources/Metadata.appintents" ]] || { echo "No Shortcuts metadata generated" >&2; exit 1; }
-else
-  echo "warning: no compiler constant values found; Shortcuts actions won't be listed" >&2
-fi
+    --source-file-list "$inter/$1.SwiftFileList" \
+    --swift-const-vals-list "$consts" >/dev/null
+  rm -f "$consts"
+  [[ -d "$2/Metadata.appintents" ]] || { echo "No App Intents metadata generated for $1" >&2; exit 1; }
+}
+appintents_metadata Thuner "$APP/Contents/Resources"
 # ditto keeps the framework's symlinks intact.
 ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
@@ -100,6 +105,7 @@ widget = {
 }
 with open(sys.argv[2], "wb") as f: plistlib.dump(widget, f)
 PY
+appintents_metadata ThunerWidget "$WIDGET/Contents/Resources"
 
 # Sign inside-out, as Sparkle's docs prescribe for a Developer ID app (no --deep).
 sign() { codesign --force --options runtime $STAMP --sign "$SIGN_IDENTITY" "$@"; }

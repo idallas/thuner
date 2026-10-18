@@ -99,6 +99,12 @@ struct FloatingCoverView: View {
                 placeholder
             }
 
+            if hovering, model.controllablePlayer != nil {
+                PlaybackButtons(model: model, size: 15)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 12)
+                    .transition(.opacity)
+            }
             if hovering {
                 LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 2) {

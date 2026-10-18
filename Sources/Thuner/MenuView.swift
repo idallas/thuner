@@ -2,6 +2,7 @@ import SwiftUI
 import ThunerCore
 
 struct MenuView: View {
+    @State private var hoveringCover = false
     @Bindable var model: AppModel
     let actions: PanelActions
     @AppStorage("menuActivityExpanded") private var activityExpanded = true
@@ -99,8 +100,19 @@ struct MenuView: View {
             }
             .frame(width: 92, height: 92)
             .background(.quaternary)
+            .overlay {
+                // Playback controls on hover, for Apple Music and Spotify.
+                if hoveringCover, model.controllablePlayer != nil {
+                    ZStack {
+                        Color.black.opacity(0.25)
+                        PlaybackButtons(model: model, size: 11)
+                    }
+                    .transition(.opacity)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+            .onHover { inside in withAnimation(.easeInOut(duration: 0.15)) { hoveringCover = inside } }
 
             VStack(alignment: .leading, spacing: 3) {
                 if let track = model.shownTrack {
@@ -272,6 +284,11 @@ struct MenuView: View {
 
     @ViewBuilder
     private var alerts: some View {
+        if let problem = model.playbackProblem {
+            Label(problem, systemImage: "playpause")
+                .font(.system(size: 11)).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         // (While standing by for the turntable Mac, the line above already says so.)
         if model.role == .secondary, !model.arbiterAllowsPush, !model.peerHasControl {
             Label("Deferring to \(model.lastPrimaryPeer.map(AppModel.shown) ?? "the turntable Mac")", systemImage: "hand.raised")

@@ -26,6 +26,10 @@ final class WebDisplayServer: @unchecked Sendable {
         var artwork: String?
         /// Where it came from: "Shazam", "Apple Music", "Spotify", or the turntable Mac's name.
         var source: String?
+        /// The player the playback controls act on ("Apple Music" or "Spotify"), if there's one, and whether it's
+        /// paused (for a play or pause button).
+        var player: String?
+        var paused: Bool?
     }
 
     struct ControlInfo: Sendable {

@@ -22,6 +22,8 @@
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>ThUNER sends play, pause and skip to Apple Music or Spotify when you use its playback controls. It asks only when you first use one.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>With System Audio as the input, ThUNER listens to what this Mac is playing (a browser, YouTube Music, any app) to identify it.</string>
 	<key>NSBonjourServices</key>

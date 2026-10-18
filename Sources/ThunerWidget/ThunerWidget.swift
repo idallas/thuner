@@ -13,6 +13,8 @@ private struct NowPlayingJSON: Decodable {
     var album: String?
     var artwork: String?
     var source: String?
+    var player: String?
+    var paused: Bool?
 }
 
 struct NowPlayingProvider: TimelineProvider {
@@ -43,7 +45,8 @@ struct NowPlayingProvider: TimelineProvider {
            let (imageData, _) = try? await session.data(from: url) {
             cover = NSImage(data: imageData)
         }
-        return NowPlayingEntry(date: .now, title: title, artist: now.artist, album: now.album, source: now.source, cover: cover)
+        return NowPlayingEntry(date: .now, title: title, artist: now.artist, album: now.album, source: now.source, cover: cover,
+                               player: now.player, paused: now.paused ?? false)
     }
 }
 

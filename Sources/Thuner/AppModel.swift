@@ -325,6 +325,70 @@ final class AppModel {
 
     /// The Music or Spotify app playing right now, when it's being used instead of Shazam.
     private(set) var activePlayer: PlayerMonitor.Snapshot?
+
+    // MARK: Playback controls
+
+    /// What the playback controls act on: the most recently active of Apple Music and Spotify that's still open.
+    /// A paused one counts only while ThUNER isn't showing something else (the turntable Mac's record, say).
+    private(set) var controllablePlayer: PlayerMonitor.Snapshot?
+    /// Shown for a while when a control couldn't be used (ThUNER not allowed to control the app, say).
+    private(set) var playbackProblem: String?
+    @ObservationIgnored private var playbackProblemTask: Task<Void, Never>?
+
+    private func updateControllablePlayer() {
+        var player = players.latest.values.filter { PlayerControl.isRunning($0.source) }.max { $0.receivedAt < $1.receivedAt }
+        if let p = player, !p.isPlaying {
+            if peerHasControl || shownTrack.map({ !$0.isSameSong(as: p.track) }) == true { player = nil }
+        }
+        if player != controllablePlayer { controllablePlayer = player }
+    }
+
+    /// Play/pause or skip in the player the controls act on. The first time for each app, macOS asks whether
+    /// ThUNER may control it.
+    func playback(_ command: PlayerControl.Command) {
+        Task { _ = await playbackResult(command) }
+    }
+
+    /// Does it, and says what happened (for Shortcuts): "Playing", or what got in the way.
+    func playbackResult(_ command: PlayerControl.Command) async -> String {
+        guard let player = controllablePlayer else {
+            let text = "Nothing to control: playback controls work with Apple Music and Spotify"
+            showPlaybackProblem(text)
+            return text
+        }
+        let name = player.source.rawValue
+        switch await PlayerControl.send(command, to: player.source) {
+        case .done:
+            playbackProblem = nil
+            switch command {
+            case .playPause: return player.isPlaying ? "\(name) paused" : "\(name) playing"
+            case .next: return "\(name): next track"
+            case .previous: return "\(name): previous track"
+            }
+        case .notRunning:
+            let text = "\(name) isn't open"
+            showPlaybackProblem(text)
+            return text
+        case .notAllowed:
+            let text = "Allow ThUNER to control \(name): System Settings → Privacy & Security → Automation"
+            showPlaybackProblem(text)
+            return text
+        case .failed(let message):
+            let text = "\(name) didn't respond (\(message))"
+            showPlaybackProblem(text)
+            return text
+        }
+    }
+
+    private func showPlaybackProblem(_ text: String) {
+        note(text)
+        playbackProblem = text
+        playbackProblemTask?.cancel()
+        playbackProblemTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            if !Task.isCancelled { self?.playbackProblem = nil }
+        }
+    }
     /// The mic is off (a player is reporting the track, listening is paused, or the turntable Mac has it).
     private(set) var micSuspended = false
 
@@ -1082,6 +1146,7 @@ final class AppModel {
         }
         checkAutoPause(at: now)
         noteRecentAudioApps(at: now)
+        updateControllablePlayer()
         if streamSharing, !streamSender.idle, let since = silentSince, now.timeIntervalSince(since) > Self.streamIdleAfter {
             streamSender.idle = true
         }
@@ -1209,6 +1274,10 @@ final class AppModel {
             }
             now.source = machine.state == .playing ? "Identified by Shazam" : nil
         }
+        if let player = controllablePlayer {
+            now.player = player.source.rawValue
+            now.paused = !player.isPlaying
+        }
         return now
     }
 
@@ -1313,6 +1382,7 @@ final class AppModel {
     // MARK: Spotify / Apple Music
 
     private func playerChanged() {
+        defer { updateControllablePlayer() }
         let enabled = players.latest.values.filter {
             $0.isPlaying && ($0.source == .appleMusic ? useAppleMusic : useSpotify)
         }
