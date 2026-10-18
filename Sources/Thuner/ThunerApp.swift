@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model = AppModel()
         self.model = model
+        AppModel.current = model
         AppWindows.shared.model = model
         let panel = PanelController(model: model)
         self.panel = panel

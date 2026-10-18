@@ -10,6 +10,8 @@ import os
 /// Everything here runs on the main actor; audio arrives from the tap thread and is hopped over.
 @MainActor @Observable
 final class AppModel {
+    /// The app's one model, for Shortcuts actions (which arrive with no other way to reach it).
+    static weak var current: AppModel?
     struct LogEntry: Identifiable {
         let id = UUID()
         let date: Date

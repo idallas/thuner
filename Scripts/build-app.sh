@@ -53,6 +53,27 @@ else
 fi
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+
+# Shortcuts actions: the Shortcuts app finds them through Metadata.appintents, which Xcode generates from the
+# compiler's constant values and SwiftPM doesn't. Run that step here (the metadata doesn't depend on the arch).
+INTERMEDIATES=.build/out/Intermediates.noindex/Thuner.build/Release/Thuner-p.build/Objects-normal/arm64
+if [[ -f $INTERMEDIATES/Thuner.SwiftFileList ]] && ls $INTERMEDIATES/*.swiftconstvalues >/dev/null 2>&1; then
+  CONSTS=$(mktemp)
+  ls $PWD/$INTERMEDIATES/*.swiftconstvalues > "$CONSTS"
+  xcrun appintentsmetadataprocessor --quiet-warnings \
+    --output "$APP/Contents/Resources" \
+    --toolchain-dir "$(xcrun --find swift | sed 's|/usr/bin/swift$||')" \
+    --module-name Thuner \
+    --sdk-root "$(xcrun --sdk macosx --show-sdk-path)" \
+    --xcode-version "$(xcodebuild -version | awk '/Build version/{print $3}')" \
+    --platform-family macOS --deployment-target 15.0 --target-triple arm64-apple-macos15.0 \
+    --source-file-list "$INTERMEDIATES/Thuner.SwiftFileList" \
+    --swift-const-vals-list "$CONSTS" >/dev/null
+  rm -f "$CONSTS"
+  [[ -d "$APP/Contents/Resources/Metadata.appintents" ]] || { echo "No Shortcuts metadata generated" >&2; exit 1; }
+else
+  echo "warning: no compiler constant values found; Shortcuts actions won't be listed" >&2
+fi
 # ditto keeps the framework's symlinks intact.
 ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
