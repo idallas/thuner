@@ -57,6 +57,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
             }
             window = NSWindow(contentViewController: tabs)
             window.styleMask = [.titled, .closable, .miniaturizable]
+            window.delegate = self
             window.toolbarStyle = .preference
         case .history:
             window = NSWindow(contentViewController: NSHostingController(rootView: HistoryView(model: model)))
@@ -88,8 +89,12 @@ final class AppWindows: NSObject, NSWindowDelegate {
         return window
     }
 
-    /// Closing the tour early counts as skipping it: start everything it would have.
+    /// Closing Settings ends any editing first, so a field being typed in (the stream password, an input's name)
+    /// is saved. Closing the tour early counts as skipping it: start everything it would have.
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window === windows[.settings] {
+            window.makeFirstResponder(nil)
+        }
         guard notification.object as? NSWindow === windows[.welcome], let model, !model.onboardingComplete else { return }
         model.finishOnboarding()
     }

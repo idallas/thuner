@@ -640,6 +640,11 @@ private struct StreamingSettings: View {
                     .onSubmit { model.streamPassword = passwordDraft }
                     .focused($editingPassword)
                     .onChange(of: editingPassword) { _, editing in if !editing { model.streamPassword = passwordDraft } }
+                    // And a second after typing stops (each save re-derives the key and restarts the stream).
+                    .task(id: passwordDraft) {
+                        try? await Task.sleep(for: .seconds(1))
+                        if !Task.isCancelled, passwordDraft != model.streamPassword { model.streamPassword = passwordDraft }
+                    }
                     .onAppear { passwordDraft = model.streamPassword }
             } header: {
                 Text("Password")
@@ -747,6 +752,10 @@ private struct InputNameSection: View {
                     .focused($editing)
                     .onSubmit(save)
                     .onChange(of: editing) { _, now in if !now { save() } }
+                    .task(id: draft) {
+                        try? await Task.sleep(for: .seconds(1))
+                        if !Task.isCancelled { save() }
+                    }
                     .onAppear { draft = model.selectedInputName ?? "" }
                     .onChange(of: model.inputDeviceUID) { draft = model.selectedInputName ?? "" }
                     .onChange(of: model.firstChannel) { draft = model.selectedInputName ?? "" }

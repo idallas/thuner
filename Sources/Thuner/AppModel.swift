@@ -109,6 +109,17 @@ final class AppModel {
         }
     }
     @ObservationIgnored private var streamCipher: StreamCipher?
+    /// Watches for `defaults write com.idallas.thuner streamPassword …` (a Mac without a screen) while running.
+    @ObservationIgnored private var passwordWatcher: NSKeyValueObservation?
+
+    /// A password written to the preferences goes into the Keychain (and out of the readable preferences) and
+    /// takes effect at once; an empty one clears it.
+    private func adoptTypedPassword() {
+        guard let typed = defaults.string(forKey: "streamPassword") else { return }
+        defaults.removeObject(forKey: "streamPassword")
+        note(typed.isEmpty ? "Stream password cleared" : "Stream password set")
+        streamPassword = typed
+    }
 
     private func applyStreamPassword() {
         streamCipher = StreamCipher(password: streamPassword)
@@ -769,6 +780,10 @@ final class AppModel {
         }
         peers.onPeersChanged = { [weak self] hosts in
             MainActor.assumeIsolated { self?.otherThuners = hosts }
+        }
+
+        passwordWatcher = d.observe(\.streamPassword, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptTypedPassword() } }
         }
 
         capture.streamSink = streamSender
@@ -1725,4 +1740,9 @@ final class AppModel {
         let s = Int(seconds.rounded())
         return String(format: "%d:%02d", s / 60, s % 60)
     }
+}
+
+extension UserDefaults {
+    /// For watching the key: `defaults write` from another process shows up here too.
+    @objc dynamic var streamPassword: String? { string(forKey: "streamPassword") }
 }
