@@ -4,6 +4,10 @@
 #   Scripts/release.sh 1.0.0 "What's new, as one line or simple HTML"
 #   Scripts/deploy-website.sh          # then publish
 #
+# Testing channel: CHANNEL=testing Scripts/release.sh 1.3.3-beta.1 "notes" puts the build in the appcast for Macs
+# with Settings → Updates → "Get test builds" on (Sparkle channels), and leaves the website's download button alone.
+# Scripts/promote-release.sh 1.3.3-beta.1 later makes that build everyone's (stable).
+#
 # The website files (appcast, release notes, downloads, the ThUNER page) live in a separate repo; WEBSITE_DIR in
 # Scripts/config.local.sh points at its software/ folder. Commit the changes there after a release.
 #
@@ -31,6 +35,12 @@ BUILD_NUMBER=$(date -u +%Y%m%d%H%M)   # always increasing, which is what Sparkle
 SPARKLE_BIN=.build/artifacts/sparkle/Sparkle/bin
 UPDATES=$WEBSITE_DIR/thuner/updates
 ZIP_NAME=ThUNER-$VERSION.zip
+CHANNEL=${CHANNEL:-}
+CHANNEL_ARGS=()
+if [[ -n $CHANNEL ]]; then
+  [[ $CHANNEL == testing ]] || { echo "error: the only channel is testing (CHANNEL=testing), or none for stable" >&2; exit 1; }
+  CHANNEL_ARGS=(--channel "$CHANNEL")
+fi
 URL_PREFIX=https://idallas.com/software/thuner/updates/
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
@@ -55,23 +65,15 @@ fi
 "$SPARKLE_BIN/generate_appcast" --account thuner \
   --download-url-prefix "$URL_PREFIX" \
   --embed-release-notes \
+  $CHANNEL_ARGS \
   -o "$WEBSITE_DIR/thuner/appcast.xml" \
   "$UPDATES"
 
-# Point the download button at this version, and version the pages' stylesheet and image URLs (`?v=…`): the
-# server tells browsers to keep those for 30 days, so a changed screenshot or style under the same URL goes unseen.
-python3 - "$VERSION" "$URL_PREFIX$ZIP_NAME" "$WEBSITE_DIR/thuner/index.html" "$WEBSITE_DIR/index.html" <<'EOF'
-import re, sys
-version, url, page, overview = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-for path in (page, overview):
-    html = open(path).read()
-    if path == page:
-        # data-umami-event makes Umami count clicks as a "Download ThUNER" event, with the version attached.
-        button = f'<a class="button" href="{url}" data-umami-event="Download ThUNER" data-umami-event-version="{version}">Download ThUNER {version}</a>'
-        html = re.sub(r"<!-- download -->.*?<!-- /download -->", f"<!-- download -->{button}<!-- /download -->", html, flags=re.S)
-    html = re.sub(r'((?:href|src)="[^"?]+\.(?:css|png|jpg|webp))(?:\?v=[^"]*)?"', rf'\1?v={version}"', html)
-    open(path, "w").write(html)
-EOF
+if [[ -z $CHANNEL ]]; then
+  Scripts/point-website.py "$VERSION" "$URL_PREFIX$ZIP_NAME" "$WEBSITE_DIR/thuner/index.html" "$WEBSITE_DIR/index.html"
+else
+  echo "Testing release: only Macs with \"Get test builds\" on will see it; the download button stays as it is."
+fi
 
 echo
 echo "Released $VERSION (build $BUILD_NUMBER): $UPDATES/$ZIP_NAME"

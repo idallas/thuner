@@ -26,6 +26,25 @@ final class Updater: NSObject, SPUStandardUserDriverDelegate, SPUUpdaterDelegate
         didSet { controller.updater.automaticallyDownloadsUpdates = automaticallyInstalls }
     }
 
+    /// Also offer builds from the testing channel (Sparkle channels: `CHANNEL=testing Scripts/release.sh`), which come
+    /// out before everyone gets them. Stored as `updateChannel` ("testing", or nothing), so a headless Mac can be set
+    /// with `defaults write com.idallas.thuner updateChannel testing`. Turning it off doesn't go back to an older
+    /// version: the next stable release that's newer takes over.
+    var getsTestBuilds = UserDefaults.standard.string(forKey: "updateChannel") == "testing" {
+        didSet {
+            guard getsTestBuilds != oldValue else { return }
+            if getsTestBuilds { UserDefaults.standard.set("testing", forKey: "updateChannel") }
+            else { UserDefaults.standard.removeObject(forKey: "updateChannel") }
+            // Look now, with the new channels, rather than at the next scheduled check.
+            if getsTestBuilds, automaticallyChecks { controller.updater.checkForUpdatesInBackground() }
+        }
+    }
+
+    /// Sparkle asks before each check; read the preference fresh, so a `defaults write` takes effect too.
+    nonisolated func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        UserDefaults.standard.string(forKey: "updateChannel") == "testing" ? ["testing"] : []
+    }
+
     /// Report each update check to Umami (app version, macOS version, chip), so it's possible to see how many
     /// installs are active and on which versions.
     var sendsUsageStats = true {

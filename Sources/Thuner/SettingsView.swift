@@ -328,6 +328,8 @@ struct SettingsView: View {
                             Toggle("Share anonymous update-check stats", isOn: Bindable(model.updater).sendsUsageStats)
                                 .help("Each update check reports ThUNER's version, the macOS version and the chip type to the website's stats. Nothing about what you listen to.")
                         }
+                        Toggle("Get test builds", isOn: Bindable(model.updater).getsTestBuilds)
+                            .help("New versions arrive here before everyone else gets them, to try them out. Turning it off keeps the version you have until a newer regular release comes out.")
                         Button("Check Now") { model.updater.checkForUpdates() }
                     }
 
