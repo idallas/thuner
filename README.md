@@ -94,6 +94,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To report a security problem, see [SECUR
 
 MIT; see [LICENSE](LICENSE). Third-party licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+### Name and icon
+
+The MIT license covers the code, not the name or the icon. "ThUNER" and the ThUNER icon identify this project and the builds published at [idallas.com/software/thuner](https://idallas.com/software/thuner/). If you distribute a fork or a modified build, give it its own name and icon. Saying it's based on ThUNER is fine, and appreciated.
+
 ThUNER isn't affiliated with or endorsed by Apple, Shazam, Spotify, Last.fm, ListenBrainz or Tuneshine. Their names are used only to describe what ThUNER works with.
 
-The name comes from an old nickname, after the surname Bethune, and it's a tuner: the bold letters spell TUNER.
+The name comes from an old nickname, after the surname Bethune, and it's a tuner: the bold letters spell TUNER. The h is silent.
