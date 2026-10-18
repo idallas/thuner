@@ -58,15 +58,19 @@ fi
   -o "$WEBSITE_DIR/thuner/appcast.xml" \
   "$UPDATES"
 
-# Point the download button at this version.
-python3 - "$VERSION" "$URL_PREFIX$ZIP_NAME" "$WEBSITE_DIR/thuner/index.html" <<'EOF'
+# Point the download button at this version, and version the pages' stylesheet and image URLs (`?v=…`): the
+# server tells browsers to keep those for 30 days, so a changed screenshot or style under the same URL goes unseen.
+python3 - "$VERSION" "$URL_PREFIX$ZIP_NAME" "$WEBSITE_DIR/thuner/index.html" "$WEBSITE_DIR/index.html" <<'EOF'
 import re, sys
-version, url, path = sys.argv[1], sys.argv[2], sys.argv[3]
-html = open(path).read()
-# data-umami-event makes Umami count clicks as a "Download ThUNER" event, with the version attached.
-button = f'<a class="button" href="{url}" data-umami-event="Download ThUNER" data-umami-event-version="{version}">Download ThUNER {version}</a>'
-html = re.sub(r"<!-- download -->.*?<!-- /download -->", f"<!-- download -->{button}<!-- /download -->", html, flags=re.S)
-open(path, "w").write(html)
+version, url, page, overview = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+for path in (page, overview):
+    html = open(path).read()
+    if path == page:
+        # data-umami-event makes Umami count clicks as a "Download ThUNER" event, with the version attached.
+        button = f'<a class="button" href="{url}" data-umami-event="Download ThUNER" data-umami-event-version="{version}">Download ThUNER {version}</a>'
+        html = re.sub(r"<!-- download -->.*?<!-- /download -->", f"<!-- download -->{button}<!-- /download -->", html, flags=re.S)
+    html = re.sub(r'((?:href|src)="[^"?]+\.(?:css|png|jpg|webp))(?:\?v=[^"]*)?"', rf'\1?v={version}"', html)
+    open(path, "w").write(html)
 EOF
 
 echo
