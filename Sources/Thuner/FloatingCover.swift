@@ -69,13 +69,10 @@ final class FloatingCoverController {
     }
 }
 
-/// NSHostingView swallows mouse-downs, so isMovableByWindowBackground alone doesn't let you drag the window.
+/// Dragging is SwiftUI's WindowDragGesture on the cover (see FloatingCoverView), so the playback buttons still get
+/// their clicks; the first click works without bringing ThUNER forward first.
 private final class DraggableHostingView<Content: View>: NSHostingView<Content> {
-    override var mouseDownCanMoveWindow: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 struct FloatingCoverView: View {
@@ -85,40 +82,50 @@ struct FloatingCoverView: View {
     var body: some View {
         let track = model.shownTrack
         ZStack(alignment: .bottomLeading) {
-            Color.black
-            if let url = track?.artworkURL.map(Self.secure) {
-                AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.4))) { phase in
-                    if let image = phase.image {
-                        image.resizable().aspectRatio(contentMode: .fill).transition(.opacity)
-                    } else {
-                        placeholder
+            // The cover: dragging it moves the window.
+            ZStack {
+                Color.black
+                if let url = track?.artworkURL.map(Self.secure) {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.4))) { phase in
+                        if let image = phase.image {
+                            image.resizable().aspectRatio(contentMode: .fill).transition(.opacity)
+                        } else {
+                            placeholder
+                        }
                     }
+                    .id(url)
+                } else {
+                    placeholder
                 }
-                .id(url)
-            } else {
-                placeholder
+            }
+            .gesture(WindowDragGesture())
+
+            if hovering {
+                // The words over a fade; clicks and drags go through to the cover.
+                ZStack(alignment: .bottomLeading) {
+                    LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track?.title ?? "Nothing playing").font(.headline).lineLimit(2)
+                        if let track {
+                            Text(track.artist).font(.subheadline).lineLimit(1)
+                            if let album = track.album {
+                                Text(album).font(.caption).opacity(0.75).lineLimit(1)
+                            }
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(10)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
 
+            // Last, so nothing covers them.
             if hovering, model.controllablePlayer != nil {
                 PlaybackButtons(model: model, size: 15)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.top, 12)
                     .transition(.opacity)
-            }
-            if hovering {
-                LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .center, endPoint: .bottom)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track?.title ?? "Nothing playing").font(.headline).lineLimit(2)
-                    if let track {
-                        Text(track.artist).font(.subheadline).lineLimit(1)
-                        if let album = track.album {
-                            Text(album).font(.caption).opacity(0.75).lineLimit(1)
-                        }
-                    }
-                }
-                .foregroundStyle(.white)
-                .padding(10)
-                .transition(.opacity)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

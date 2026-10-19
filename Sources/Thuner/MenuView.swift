@@ -113,6 +113,7 @@ struct MenuView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
             .onHover { inside in withAnimation(.easeInOut(duration: 0.15)) { hoveringCover = inside } }
+            .allowsHitTesting(model.controllablePlayer != nil)
 
             VStack(alignment: .leading, spacing: 3) {
                 if let track = model.shownTrack {
@@ -139,10 +140,12 @@ struct MenuView: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+            .allowsHitTesting(false)
         }
         .padding(10)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .allowsHitTesting(false)  // static: let drags through to the panel's drag handle
+        // Static, so drags go through to the panel's drag handle; only the cover takes clicks, and only while it
+        // has playback controls to show.
+        .background { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.quaternary.opacity(0.5)).allowsHitTesting(false) }
     }
 
     /// The history entry for what's on screen, for its source and scrobble status.
