@@ -15,7 +15,7 @@ So you know what to look at:
   - Anyone who can reach it can **read** what's playing and the controls' state.
   - **Changing** anything needs the API token. The one exception is programs on the same Mac that send no `Origin` header, like curl or scripts. Browser pages always need the token.
 - **Peer link, UDP port 47474.** ThUNER instances advertise themselves over Bonjour (`_thuner._udp`) and exchange now-playing messages. A datagram is only accepted from an address found over Bonjour. There's no shared secret yet, so treat the local network as trusted.
-- **Twist Commando App Link.** A client connection to 127.0.0.1:9034, on the same Mac only.
+- **Applug.** When "Offer ThUNER's controls to other apps" is on, ThUNER listens on 127.0.0.1 only, on a random port, and announces it with a random key to your own processes on this Mac. Any app running as you can read and change the controls it offers.
 - **Outgoing connections:**
   - Shazam (anonymous audio fingerprints) and the iTunes Search API
   - Spotify oEmbed and Apple's artwork CDN

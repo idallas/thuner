@@ -240,7 +240,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Other apps")
                     } footer: {
-                        Text("Listening, the silence threshold, levels and meters, now playing, radio mode, the Tuneshine and more, for apps on this Mac that speak Applug, like Twist Commando (any knob or pad) and Action Hero. Older Twist Commandos connect over App Link.")
+                        Text("Listening, the silence threshold, levels and meters, now playing, radio mode, the Tuneshine and more, for apps on this Mac that speak Applug, like Twist Commando (any knob or pad) and Action Hero.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {

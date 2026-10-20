@@ -214,8 +214,8 @@ final class AppModel {
     private(set) var micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @ObservationIgnored private var networkStarted = false
 
-    /// Offer ThUNER's controls to other apps on this Mac over Applug (Action Hero, Twist Commando; older Twist
-    /// Commandos over App Link). Kept under its old name so the setting carries over.
+    /// Offer ThUNER's controls to other apps on this Mac over Applug (Action Hero, Twist Commando).
+    /// Kept under its old name so the setting carries over.
     var twistCommandoEnabled: Bool {
         didSet {
             save(twistCommandoEnabled, "twistCommandoEnabled")
@@ -1457,13 +1457,12 @@ final class AppModel {
         return now
     }
 
-    // MARK: Controls (App Link, HTTP API)
+    // MARK: Controls (Applug, HTTP API)
 
-    /// ThUNER's controls, shared by every adapter (Twist Commando's App Link, the HTTP API).
+    /// ThUNER's controls, shared by every adapter (Applug, the HTTP API).
     @ObservationIgnored private(set) lazy var controls = ControlSurface(model: self)
 
-    /// ThUNER's controls for other apps on this Mac (Applug), with Twist Commando's App Link port too for versions
-    /// that don't speak Applug yet (only while Twist Commando is running).
+    /// ThUNER's controls for other apps on this Mac (Applug).
     private func makeApplug() -> ApplugProvider {
         controls.refresh()
         let states = controls.states
@@ -1480,7 +1479,6 @@ final class AppModel {
                            value: kind == .meter ? nil : state?.value, text: state?.text, on: state?.on,
                            group: definition.group, channels: definition.meterChannels, readOnly: definition.readOnly)
         })
-        provider.appLinkCompatibility = AppLinkCompatibility()
         provider.onWatchedMetersChange = { [weak self] meters in
             self?.logger.notice("Meters wanted: \(meters.sorted().joined(separator: ", "), privacy: .public)")
             self?.updateLevelPolling()
