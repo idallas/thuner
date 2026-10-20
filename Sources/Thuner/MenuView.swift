@@ -201,10 +201,10 @@ struct MenuView: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .disabled(model.micOffReason != nil && model.activePlayer == nil)
-                // The device keeps room for its name; the channel pair (which can carry a long input name, like
-                // "Turntable (3–4)") gives way. Its own fixed width squeezed the device picker to just its arrows.
-                .frame(minWidth: 90)
-                .layoutPriority(1)
+                // The device fills the row and the channel pair gets a set width (enough for "Turntable (3–4)";
+                // longer names truncate). Left to share the space, whichever picker was favoured took all of it
+                // and squeezed the other down to its arrows.
+                .frame(maxWidth: .infinity)
                 if let device = model.selectedDevice, device.inputChannels > 2 {
                     Picker("Channels", selection: $model.firstChannel) {
                         ForEach(device.channelPairs, id: \.first) { pair in
@@ -213,7 +213,7 @@ struct MenuView: View {
                     }
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(maxWidth: 160)
+                    .frame(width: 130)
                 }
                 if model.micEnabled {
                 Button { model.togglePause() } label: {
