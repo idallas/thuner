@@ -161,8 +161,9 @@ actor ArtworkLookup {
         // Prefer the same album, so a compilation doesn't win over the original release.
         let best = candidates.first { $0.collectionName == track.album } ?? candidates.first
         guard let best, let art = best.artworkUrl100 else {
-            // Not in Apple's store as a song (a track from your own library, or one the label pulled), but its
-            // album often is: the same cover.
+            // Apple's search misses some songs that are in the catalogue (NOFX's "Perfect Government" is track 7
+            // of "Punk in Drublic", yet searching for it finds nothing), and tracks from your own library aren't
+            // there at all. The album's other songs carry the same cover.
             return await albumArtwork(track).map { Found(url: $0) }
         }
         return Found(
