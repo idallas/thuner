@@ -1,13 +1,13 @@
 {
-  "originHash" : "9d27c7d9ff9ce24845d39e31efdb99e2ed60d709aa3dbace9fce0b0dcf805128",
+  "originHash" : "8da9323be2246b964bbf8766ce68a7341a6acc15ea8591467bcf62b56aa9fa08",
   "pins" : [
     {
       "identity" : "applug",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/idallas/applug",
       "state" : {
-        "revision" : "36601b03ffc2168d0fa603463f68cdcab2f173f8",
-        "version" : "0.1.0"
+        "revision" : "ab5ae843d20973afe18ba06621e0cc2ea3da1ab3",
+        "version" : "0.1.1"
       }
     },
     {

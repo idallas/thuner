@@ -7,7 +7,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         // Offering ThUNER's controls to other apps on the Mac (Twist Commando, Action Hero, …).
-        .package(url: "https://github.com/idallas/applug", from: "0.1.0"),
+        .package(url: "https://github.com/idallas/applug", from: "0.1.1"),
     ],
     targets: [
         // Pure logic (state machine, level gate, track identity). No Apple media frameworks, so it's easy to test.
