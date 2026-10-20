@@ -80,6 +80,7 @@ struct MenuView: View {
                 .init(title: "Radio Mode (Don't Scrobble)", isOn: model.radioMode) { model.radioMode.toggle() },
                 .separator,
                 .init(title: "History…") { open(.history) },
+                .init(title: "Stream…") { open(.stream) },
                 .init(title: "Settings…") { open(.settings) },
                 .init(title: "Check for Updates…") { model.updater.checkForUpdates() },
                 .separator,
@@ -200,6 +201,10 @@ struct MenuView: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .disabled(model.micOffReason != nil && model.activePlayer == nil)
+                // The device keeps room for its name; the channel pair (which can carry a long input name, like
+                // "Turntable (3–4)") gives way. Its own fixed width squeezed the device picker to just its arrows.
+                .frame(minWidth: 90)
+                .layoutPriority(1)
                 if let device = model.selectedDevice, device.inputChannels > 2 {
                     Picker("Channels", selection: $model.firstChannel) {
                         ForEach(device.channelPairs, id: \.first) { pair in
@@ -208,7 +213,7 @@ struct MenuView: View {
                     }
                     .labelsHidden()
                     .controlSize(.small)
-                    .fixedSize()
+                    .frame(maxWidth: 160)
                 }
                 if model.micEnabled {
                 Button { model.togglePause() } label: {
@@ -240,7 +245,10 @@ struct MenuView: View {
                 }
             }
             if !model.streamSource.isEmpty {
-                StreamMeter(model: model, compact: true)
+                Button { open(.stream) } label: {
+                    StreamMeter(model: model, compact: true).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
     }

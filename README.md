@@ -84,7 +84,7 @@ When the web display is on, ThUNER serves the following on port 47480:
 - `GET /api/events`: Server-Sent Events.
 - `POST /api/controls/<id>`: changes a control. The body is `{"value": 0-1}`, `{"press": true}` or `{"on": bool}`.
 
-Changing anything needs the token from Settings → Display, except from scripts on the same Mac. Settings → Display can also limit the server to this Mac only.
+Changing anything needs the token from Settings → Controls, except from scripts on the same Mac. Settings → Display can also limit the server to this Mac only.
 
 ## Contributing
 

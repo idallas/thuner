@@ -140,6 +140,15 @@ final class AppModel {
     @ObservationIgnored private var streamReceiver: AudioStreamReceiver?
     @ObservationIgnored private var lastStreamLog = Date.distantPast
 
+    /// The listening session in progress (totals that survive quiet gaps, a minute-by-minute history), and past
+    /// sessions, saved to Application Support/Thuner/stream-log.json.
+    private(set) var streamSession: StreamSession?
+    private(set) var streamLog = StreamLog()
+    @ObservationIgnored private var streamRecorder: StreamSessionRecorder?
+    @ObservationIgnored private var lastStreamRecord = Date.distantPast
+    @ObservationIgnored private var lastStreamLogSave = Date.distantPast
+    @ObservationIgnored private var lastStreamSessionShown = Date.distantPast
+
     /// Peak levels on both sides of the stream while listening (dBFS, with meter falloff), for the meters and
     /// Twist Commando. `source` is the other Mac's input as it measured it; nil if it hasn't said lately.
     struct Stereo: Equatable {
@@ -508,16 +517,39 @@ final class AppModel {
     private func noteRecentAudioApps(at now: Date) {
         guard now.timeIntervalSince(lastRecentAppsCheck) >= 3 else { return }
         lastRecentAppsCheck = now
-        var recent = recentAudioApps
-        for pid in AudioDevices.processesPlayingAudio() {
-            guard let app = AudioDevices.owningApp(of: pid) else { continue }
-            recent.removeAll { $0.bundleID == app.bundleID }
-            recent.insert(app, at: 0)
+        queryPlayingProcesses { [weak self] pids in
+            guard let self else { return }
+            var recent = recentAudioApps
+            for pid in pids {
+                guard let app = AudioDevices.owningApp(of: pid) else { continue }
+                recent.removeAll { $0.bundleID == app.bundleID }
+                recent.insert(app, at: 0)
+            }
+            recent = Array(recent.prefix(12))
+            if recent != recentAudioApps {
+                recentAudioApps = recent
+                if let data = try? JSONEncoder().encode(recent) { defaults.set(data, forKey: "recentAudioApps") }
+            }
         }
-        recent = Array(recent.prefix(12))
-        if recent != recentAudioApps {
-            recentAudioApps = recent
-            if let data = try? JSONEncoder().encode(recent) { defaults.set(data, forKey: "recentAudioApps") }
+    }
+
+    /// Asking Core Audio which processes are playing can take most of a second while audio is running (it waits on
+    /// coreaudiod), so it's asked on a queue of its own: on the main thread it froze the meters every few seconds.
+    /// A query already under way makes the next one wait its turn, unless `always` is set.
+    nonisolated private static let audioProcessQueue = DispatchQueue(label: "com.idallas.thuner.audio-processes", qos: .utility)
+    @ObservationIgnored private var audioProcessQueryRunning = false
+
+    private func queryPlayingProcesses(always: Bool = false, _ done: @escaping @MainActor (Set<pid_t>) -> Void) {
+        guard always || !audioProcessQueryRunning else { return }
+        audioProcessQueryRunning = true
+        Self.audioProcessQueue.async { [weak self] in
+            let pids = AudioDevices.processesPlayingAudio()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.audioProcessQueryRunning = false
+                    done(pids)
+                }
+            }
         }
     }
 
@@ -573,13 +605,16 @@ final class AppModel {
             // An app started playing sound and kept it up for 5 seconds (alert sounds are too short to count).
             if now.timeIntervalSince(lastOutputCheck) >= 1 {
                 lastOutputCheck = now
-                let playing = AudioDevices.processesPlayingAudio()
-                alreadyPlaying.formIntersection(playing)  // stopped, so starting again would count
-                startedPlaying = startedPlaying.filter { playing.contains($0.key) }
-                for pid in playing.subtracting(alreadyPlaying) where startedPlaying[pid] == nil { startedPlaying[pid] = now }
-                if let (pid, _) = startedPlaying.first(where: { now.timeIntervalSince($0.value) >= 5 }) {
-                    let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "An app"
-                    wake("\(name) started playing")
+                queryPlayingProcesses { [weak self] playing in
+                    guard let self, autoPaused else { return }
+                    let now = Date()
+                    alreadyPlaying.formIntersection(playing)  // stopped, so starting again would count
+                    startedPlaying = startedPlaying.filter { playing.contains($0.key) }
+                    for pid in playing.subtracting(alreadyPlaying) where startedPlaying[pid] == nil { startedPlaying[pid] = now }
+                    if let (pid, _) = startedPlaying.first(where: { now.timeIntervalSince($0.value) >= 5 }) {
+                        let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "An app"
+                        wake("\(name) started playing")
+                    }
                 }
             }
             return
@@ -587,8 +622,14 @@ final class AppModel {
         guard autoPauseMinutes > 0, micOffReason == nil,
               now.timeIntervalSince(lastActivity) >= autoPauseMinutes * 60 else { return }
         autoPaused = true
-        alreadyPlaying = AudioDevices.processesPlayingAudio()
+        alreadyPlaying = []
         startedPlaying = [:]
+        queryPlayingProcesses(always: true) { [weak self] playing in
+            guard let self else { return }
+            alreadyPlaying = playing
+            // A check that answered first may have taken these for apps that just started.
+            startedPlaying = startedPlaying.filter { !playing.contains($0.key) }
+        }
         note("Nothing identified for \(Int(autoPauseMinutes)) minutes; pausing until something plays")
         updateCapture()
     }
@@ -800,6 +841,17 @@ final class AppModel {
                 try? FileManager.default.moveItem(at: Self.historyURL, to: aside)
             }
         }
+        if let data = try? Data(contentsOf: Self.streamLogURL) {
+            do {
+                streamLog = try JSONDecoder().decode(StreamLog.self, from: data)
+            } catch {
+                // As with History: keep a log we couldn't read rather than let the next save replace it.
+                logger.error("Couldn't read the stream log: \(error, privacy: .public)")
+                let aside = Self.streamLogURL.deletingLastPathComponent()
+                    .appendingPathComponent("stream-log-unreadable-\(Int(Date().timeIntervalSince1970)).json")
+                try? FileManager.default.moveItem(at: Self.streamLogURL, to: aside)
+            }
+        }
         streamSharing = d.bool(forKey: "streamSharing")
         streamSource = d.string(forKey: "streamSource") ?? ""
         streamMethod = StreamMethod(rawValue: d.string(forKey: "streamMethod") ?? "") ?? .resilient
@@ -844,6 +896,12 @@ final class AppModel {
 
         peers.onMessage = { [weak self] message in
             MainActor.assumeIsolated { self?.received(message) }
+        }
+        peers.onAddressesChanged = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let receiver = self.streamReceiver, self.streamSource != Self.streamThisMac else { return }
+                receiver.setSourceAddresses(self.peers.addresses(ofHost: self.streamSource))
+            }
         }
         peers.onPeersChanged = { [weak self] hosts in
             MainActor.assumeIsolated { self?.otherThuners = hosts }
@@ -1029,6 +1087,7 @@ final class AppModel {
 
     /// Starts (or restarts, with the current settings) listening to `streamSource`, or stops.
     private func applyStreamReceiver() {
+        endStreamSession()
         streamReceiver?.stop()
         streamReceiver = nil
         updateLevelPolling()
@@ -1064,10 +1123,94 @@ final class AppModel {
             }
         }
         streamReceiver = receiver
+        if streamSource != Self.streamThisMac { receiver.setSourceAddresses(peers.addresses(ofHost: streamSource)) }
         receiver.start()
+        beginStreamSession()
         updateLevelPolling()
         streamProblem = receiver.error
         note("Listening to \(streamSource)'s stream (\(streamMethod.rawValue))")
+    }
+
+    // MARK: Stream sessions
+
+    private func beginStreamSession() {
+        let now = Date()
+        if let earlier = streamLog.resumable(source: streamSource, method: streamMethod, at: now) {
+            streamRecorder = StreamSessionRecorder(continuing: earlier)
+        } else {
+            streamRecorder = StreamSessionRecorder(session: StreamSession(source: streamSource, method: streamMethod, started: now))
+        }
+        streamSession = streamRecorder?.snapshot
+    }
+
+    private func endStreamSession() {
+        guard let recorder = streamRecorder else { return }
+        streamRecorder = nil
+        streamSession = nil
+        streamLog.save(recorder.snapshot)
+        saveStreamLog()
+    }
+
+    /// Ends the session in progress and starts a fresh one (the Stream window's New Session).
+    func startNewStreamSession() {
+        guard let recorder = streamRecorder else { return }
+        streamLog.save(recorder.snapshot)
+        saveStreamLog()
+        streamRecorder = StreamSessionRecorder(session: StreamSession(source: streamSource, method: streamMethod, started: Date()))
+        streamSession = streamRecorder?.snapshot
+    }
+
+    func clearStreamLog() {
+        streamLog.sessions.removeAll { $0.id != streamSession?.id }
+        saveStreamLog()
+    }
+
+    /// Once a second while listening.
+    private func recordStreamSession(at now: Date) {
+        guard var recorder = streamRecorder, let receiver = streamReceiver,
+              now.timeIntervalSince(lastStreamRecord) >= 1 else { return }
+        lastStreamRecord = now
+        let resends = receiver.resendStats
+        let latency = receiver.latency
+        recorder.record(StreamSample(stats: receiver.stats, latencyMs: latency?.totalMs,
+                                     resendsRequested: resends.requested, resendsRecovered: resends.recovered,
+                                     outputBufferMs: latency?.outputBufferMs ?? 0), at: now)
+        streamRecorder = recorder
+        let snapshot = recorder.snapshot
+        // Shown every few seconds, not every second: each change re-lays out the Stream window, graph and all.
+        if streamSession?.id != snapshot.id || now.timeIntervalSince(lastStreamSessionShown) >= 5 {
+            lastStreamSessionShown = now
+            streamSession = snapshot
+        }
+        if now.timeIntervalSince(lastStreamLogSave) >= 60, snapshot.playingSeconds > 0 {
+            lastStreamLogSave = now
+            streamLog.save(snapshot)
+            saveStreamLog()
+        }
+    }
+
+    /// Writes the session in progress straight away (quitting).
+    func saveStreamSessionNow() {
+        if let recorder = streamRecorder { streamLog.save(recorder.snapshot) }
+        guard let data = try? JSONEncoder().encode(streamLog) else { return }
+        Self.historyQueue.sync {
+            try? FileManager.default.createDirectory(at: Self.streamLogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: Self.streamLogURL, options: .atomic)
+        }
+    }
+
+    nonisolated private static var streamLogURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Thuner/stream-log.json")
+    }
+
+    private func saveStreamLog() {
+        let snapshot = streamLog
+        Self.historyQueue.async {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? FileManager.default.createDirectory(at: Self.streamLogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: Self.streamLogURL, options: .atomic)
+        }
     }
 
     /// Lost packets asked for again, how many came back in time, and how many were given up on (resilient only).
@@ -1110,6 +1253,17 @@ final class AppModel {
             // Count silence again from now: a lone pop that never opens the gate mustn't keep the stream awake.
             silentSince = Date()
         }
+        // A brief dip below the threshold while the gate stays open: likely the gap between two tracks.
+        if gate.isOpen, micOffReason == nil {
+            if db < thresholdDB {
+                if quietSince == nil { quietSince = now }
+            } else if let since = quietSince {
+                quietSince = nil
+                if now.timeIntervalSince(since) >= Self.trackGap { perform(machine.gapEnded(at: now)) }
+            }
+        } else {
+            quietSince = nil
+        }
         switch gate.feed(levelDB: db, at: now) {
         case .opened:
             silentSince = nil
@@ -1129,6 +1283,10 @@ final class AppModel {
             break
         }
     }
+
+    /// Near-silence this long, short of the gate closing, counts as a gap between tracks.
+    private static let trackGap: TimeInterval = 0.8
+    @ObservationIgnored private var quietSince: Date?
 
     // MARK: State machine plumbing
 
@@ -1152,6 +1310,7 @@ final class AppModel {
         }
         let quiet = streamReceiver?.isQuiet ?? false
         if quiet != streamQuiet { streamQuiet = quiet }
+        recordStreamSession(at: now)
         if let receiver = streamReceiver {
             let stats = receiver.stats
             if stats != streamStats { streamStats = stats }

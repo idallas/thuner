@@ -315,7 +315,17 @@ final class AudioStreamReceiver: @unchecked Sendable {
     var onChange: (() -> Void)?
     private(set) var error: String?
 
-    private let sourceAddress: sockaddr_in
+    /// Where requests go: the source Mac's address it was found at, then whichever of its addresses it actually
+    /// sends from. A Mac on Ethernet and Wi-Fi at once (same network) can be found at either, but sends from its
+    /// primary connection, so following it keeps the stream off Wi-Fi when Ethernet is plugged in.
+    private let target: Mutex<sockaddr_in>
+    private var sourceAddress: sockaddr_in { target.withLock { $0 } }
+    /// All of the source Mac's addresses (set from the main thread, read on the network thread).
+    private let sourceAddresses = Mutex(Set<UInt32>())
+
+    func setSourceAddresses(_ addresses: [in_addr]) {
+        sourceAddresses.withLock { $0 = Set(addresses.map(\.s_addr)) }
+    }
     private var fd: Int32 = -1
     private var source: DispatchSourceRead?
     private var subscribeTimer: Timer?
@@ -395,7 +405,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
     let cipher: StreamCipher?
 
     init(source: sockaddr_in, host: String, settings: Settings, cipher: StreamCipher?) {
-        sourceAddress = source
+        target = Mutex(source)
         sourceHost = host
         self.settings = settings
         self.cipher = cipher
@@ -490,8 +500,17 @@ final class AudioStreamReceiver: @unchecked Sendable {
             guard n > 0 else { return }
             guard n <= StreamWire.maxDatagram else { continue }
             let arrival = HostClock.now()
-            // Only the Mac we subscribed to.
-            guard sender.sin_addr.s_addr == sourceAddress.sin_addr.s_addr, sender.sin_port == sourceAddress.sin_port else { continue }
+            // Only the Mac we subscribed to, from any of its addresses (one with Wi-Fi and Ethernet may answer from
+            // the other).
+            let current = sourceAddress
+            guard sender.sin_port == current.sin_port else { continue }
+            if sender.sin_addr.s_addr != current.sin_addr.s_addr {
+                guard sourceAddresses.withLock({ $0.contains(sender.sin_addr.s_addr) }) else { continue }
+                // It answers from another of its addresses: its primary connection. Ask there from now on.
+                target.withLock { $0.sin_addr = sender.sin_addr }
+                let from = UDP.string(current.sin_addr), to = UDP.string(sender.sin_addr)
+                log.notice("The stream's source sends from \(to, privacy: .public), not \(from, privacy: .public); following it")
+            }
             func handle(_ bytes: UnsafeRawBufferPointer) {
                 let n = bytes.count
                 switch StreamWire.kind(of: bytes) {

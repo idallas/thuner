@@ -243,7 +243,7 @@ final class WebDisplayServer: @unchecked Sendable {
                     "POST /api/controls/<id>": "{\"value\": 0-1} turns a level, {\"press\": true} presses, {\"on\": bool} sets a toggle",
                     "GET /now.json": "what's playing",
                 ],
-                "auth": "POST needs 'Authorization: Bearer <token>' or ?token=<token> (token in ThUNER Settings → Display), except from scripts on this Mac; web pages always need it",
+                "auth": "POST needs 'Authorization: Bearer <token>' or ?token=<token> (token in ThUNER Settings → Controls), except from scripts on this Mac; web pages always need it",
             ])
         case ("GET", "/api/controls"):
             sendJSON(connection, ["controls": controlsJSON()])

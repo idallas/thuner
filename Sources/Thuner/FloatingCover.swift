@@ -7,6 +7,7 @@ import SwiftUI
 final class FloatingCoverController {
     private var panel: NSPanel?
     private weak var model: AppModel?
+    private var frameObservers: [NSObjectProtocol] = []
 
     init(model: AppModel) {
         self.model = model
@@ -34,12 +35,20 @@ final class FloatingCoverController {
             panel.minSize = NSSize(width: 96, height: 96)
             panel.maxSize = NSSize(width: 1000, height: 1000)
             panel.contentView = DraggableHostingView(rootView: FloatingCoverView(model: model))
-            if !panel.setFrameUsingName("FloatingCover") {
-                if let screen = NSScreen.main?.visibleFrame {
-                    panel.setFrameOrigin(NSPoint(x: screen.maxX - 240, y: screen.minY + 20))
-                }
+            // ThUNER's own saved frame (AppKit's put one saved on a secondary display back on the main one),
+            // then AppKit's from before, then the bottom-right corner.
+            if let frame = WindowFrames.saved("windowFrame-floatingCover") {
+                panel.setFrame(frame, display: false)
+            } else if !panel.setFrameUsingName("FloatingCover"), let screen = NSScreen.main?.visibleFrame {
+                panel.setFrameOrigin(NSPoint(x: screen.maxX - 240, y: screen.minY + 20))
             }
-            panel.setFrameAutosaveName("FloatingCover")
+            // Saved on every move and resize, not left to the autosave: moves made by SwiftUI's WindowDragGesture
+            // weren't always written, so the cover came back where it was before.
+            for name in [NSWindow.didMoveNotification, NSWindow.didEndLiveResizeNotification] {
+                frameObservers.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { _ in
+                    MainActor.assumeIsolated { WindowFrames.save(panel.frame, "windowFrame-floatingCover") }
+                })
+            }
             self.panel = panel
         }
         guard let panel else { return }

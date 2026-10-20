@@ -2,17 +2,19 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ThunerCore
 
-/// Settings: General (this Mac's role, login, permission status), Listening, Streaming, Display, Scrobbling, Updates.
+/// Settings: General (this Mac's role, login, Apple Music and Spotify, permission status), Listening, Streaming,
+/// Display, Controls, Scrobbling, Updates.
 struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var apiKey = ""
     @State private var secret = ""
     @State private var enteringTuneshineAddress = false
     @State private var addingService = false
+    @State private var managingInputs = false
 
     /// The settings window is an NSTabViewController with toolbar tabs (AppWindows); each tab shows one pane.
     enum Pane: String, CaseIterable {
-        case general, listening, streaming, display, scrobbling, updates
+        case general, listening, streaming, display, controls, scrobbling, updates
 
         var title: String { rawValue.capitalized }
 
@@ -22,6 +24,7 @@ struct SettingsView: View {
             case .listening: "waveform"
             case .streaming: "dot.radiowaves.left.and.right"
             case .display: "rectangle.on.rectangle"
+            case .controls: "slider.horizontal.3"
             case .scrobbling: "music.note.list"
             case .updates: "arrow.down.circle"
             }
@@ -41,8 +44,18 @@ struct SettingsView: View {
                             Text("Secondary").tag(PushArbiter.Role.secondary)
                         }
                         Toggle("Launch at login", isOn: $model.launchAtLogin)
+                        Toggle("Animate menu bar icon while playing", isOn: $model.animateMenuBarIcon)
                     } footer: {
-                        Text("While the turntable Mac hears music, a secondary Mac turns its mic off and shows what the turntable Mac is playing. Use Listen Here in the menu to override until it goes quiet.")
+                        Text("While the turntable Mac hears music, a secondary Mac turns its mic off and shows what the turntable Mac plays. Listen Here in the menu overrides that until it goes quiet.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section {
+                        Toggle("Apple Music", isOn: $model.useAppleMusic)
+                        Toggle("Spotify", isOn: $model.useSpotify)
+                    } header: {
+                        Text("Follow players on this Mac")
+                    } footer: {
+                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
@@ -71,37 +84,12 @@ struct SettingsView: View {
                 Form {
                     Section {
                         Toggle("Listen with a microphone or input", isOn: $model.micEnabled)
-                    } footer: {
-                        Text("Off: ThUNER never uses the microphone or Shazam, and follows Apple Music and Spotify (and a turntable Mac, if you have one) only.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    Section {
-                        Picker("Listen to", selection: $model.systemAudioMode) {
-                            Text("Everything this Mac plays").tag(SystemAudioTap.Mode.all)
-                            Text("Only these apps").tag(SystemAudioTap.Mode.only)
-                            Text("Everything except these apps").tag(SystemAudioTap.Mode.except)
+                        LabeledContent("Inputs") {
+                            Button("Show and Name Inputs…") { managingInputs = true }
                         }
-                        if model.systemAudioMode != .all {
-                            ForEach(systemAudioCandidates) { app in
-                                Toggle(isOn: Binding(
-                                    get: { model.systemAudioApps.contains(app) },
-                                    set: { _ in model.toggleSystemAudioApp(app) }
-                                )) {
-                                    HStack(spacing: 8) {
-                                        if let icon = appIcon(app.bundleID) {
-                                            Image(nsImage: icon).resizable().frame(width: 18, height: 18)
-                                        }
-                                        Text(app.name)
-                                    }
-                                }
-                            }
-                            Button("Add App…") { addSystemAudioApp() }
-                        }
-                    } header: {
-                        Text("System Audio")
+                        .disabled(!model.micEnabled)
                     } footer: {
-                        Text("Choose System Audio as the input to identify what this Mac plays, like YouTube Music in a browser, with no microphone. Apps that played sound recently are listed; it doesn't matter which speakers an app plays through. Safari plays through a shared WebKit service, so it can't be picked out on its own.")
+                        Text("Off: ThUNER never uses the microphone or Shazam, and only follows Apple Music, Spotify and a turntable Mac. Choose the input in the menu.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
@@ -117,45 +105,45 @@ struct SettingsView: View {
                     } header: {
                         Text("Auto-pause")
                     } footer: {
-                        Text("Turns the mic off after this long with no music identified and nothing playing. It wakes when Apple Music or Spotify starts, any app on this Mac starts playing sound, or you open ThUNER. Just using the Mac doesn't wake it.")
+                        Text("Turns listening off when no music has been identified for this long. It wakes when Apple Music or Spotify starts, an app on this Mac plays sound, or you open ThUNER.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
-                    InputNameSection(model: model)
-
-                    Section("Sources") {
-                        Toggle("Use Apple Music when it's playing", isOn: $model.useAppleMusic)
-                        Toggle("Use Spotify when it's playing", isOn: $model.useSpotify)
-                        Text("While the Music or Spotify app on this Mac is playing, ThUNER takes the track from the app and doesn't run Shazam. It picks up a player at its next track change or play/pause.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    Section {
-                        ForEach(model.devices) { device in
-                            Toggle(isOn: Binding(
-                                get: { !model.hiddenInputUIDs.contains(device.uid) },
-                                set: { model.setInput(device, visible: $0) }
-                            )) {
-                                HStack {
-                                    Text(device.name)
-                                    Spacer()
-                                    Text(device.inputChannels == 1 ? "1 channel" : "\(device.inputChannels) channels")
-                                        .foregroundStyle(.secondary)
-                                    if device.uid == model.inputDeviceUID {
-                                        Text("In use").font(.caption).foregroundStyle(.green)
+                    // Only with System Audio as the input: nothing here matters otherwise.
+                    if model.usingSystemAudio {
+                        Section {
+                            Picker("Listen to", selection: $model.systemAudioMode) {
+                                Text("Everything this Mac plays").tag(SystemAudioTap.Mode.all)
+                                Text("Only these apps").tag(SystemAudioTap.Mode.only)
+                                Text("Everything except these apps").tag(SystemAudioTap.Mode.except)
+                            }
+                            if model.systemAudioMode != .all {
+                                ForEach(systemAudioCandidates) { app in
+                                    Toggle(isOn: Binding(
+                                        get: { model.systemAudioApps.contains(app) },
+                                        set: { _ in model.toggleSystemAudioApp(app) }
+                                    )) {
+                                        HStack(spacing: 8) {
+                                            if let icon = appIcon(app.bundleID) {
+                                                Image(nsImage: icon).resizable().frame(width: 18, height: 18)
+                                            }
+                                            Text(app.name)
+                                        }
                                     }
                                 }
+                                Button("Add App…") { addSystemAudioApp() }
                             }
+                        } header: {
+                            Text("System Audio")
+                        } footer: {
+                            Text("System Audio identifies what this Mac plays, like YouTube Music in a browser. Apps that played sound recently are listed. Safari plays through a shared WebKit service, so it can't be picked out on its own.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                    } header: {
-                        Text("Inputs shown in the menu")
-                    } footer: {
-                        Text("Hide inputs you'd never listen to, like the ones Zoom, Teams or Steam add.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
 
+                    }
                 }
                 .formStyle(.grouped)
+                .sheet(isPresented: $managingInputs) { InputsSheet(model: model) }
 
             case .display:
                 Form {
@@ -180,10 +168,16 @@ struct SettingsView: View {
                             Text("5 min").tag(5.0)
                             Text("15 min").tag(15.0)
                         }
-                        Toggle("Floating cover", isOn: $model.showFloatingCover)
+                    }
+                    Section {
+                        Toggle("Show the floating cover", isOn: $model.showFloatingCover)
                         Toggle("Only while music is playing", isOn: $model.floatingCoverOnlyWhilePlaying)
                             .disabled(!model.showFloatingCover)
-                            .padding(.leading, 18)
+                    } header: {
+                        Text("Floating cover")
+                    } footer: {
+                        Text("An always-on-top cover window. Drag it anywhere; hover it for playback controls while Apple Music or Spotify plays.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
                         Toggle("Web display", isOn: $model.webDisplayEnabled)
@@ -203,12 +197,17 @@ struct SettingsView: View {
                     } header: {
                         Text("Web display")
                     } footer: {
-                        Text("Show what's playing on any screen on your network: open the address in a browser. Press M to switch between the Tuneshine look and a large cover, F for full screen.")
+                        Text("What's playing, in any browser on your network. M switches between the Tuneshine look and a large cover, F goes full screen. The Control API (Controls) uses the same server.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if model.webDisplayEnabled {
-                        Section {
-                            LabeledContent("API") {
+                }
+                .formStyle(.grouped)
+
+            case .controls:
+                Form {
+                    Section {
+                        if model.webDisplayEnabled {
+                            LabeledContent("Address") {
                                 Text(model.webDisplayURL.absoluteString + "api").textSelection(.enabled)
                             }
                             LabeledContent("Token") {
@@ -221,12 +220,16 @@ struct SettingsView: View {
                                     Button("New Token") { model.regenerateAPIToken() }
                                 }
                             }
-                        } header: {
-                            Text("Control API")
-                        } footer: {
-                            Text("Home Assistant, Stream Deck, scripts and the like can read ThUNER's controls (GET /api/controls, live at /api/events) and change them (POST /api/controls/<id>). Changing needs the token, except from scripts on this Mac (web pages always need it).")
-                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            LabeledContent("Off, with the web display") {
+                                Button("Turn On") { model.webDisplayEnabled = true }
+                            }
                         }
+                    } header: {
+                        Text("Control API")
+                    } footer: {
+                        Text("For Home Assistant, Stream Deck, scripts and the like: GET /api/controls (live at /api/events), POST /api/controls/<id>. Changing needs the token, except from scripts on this Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
                         Toggle("Twist Commando", isOn: $model.twistCommandoEnabled)
@@ -237,11 +240,15 @@ struct SettingsView: View {
                     } header: {
                         Text("Controllers")
                     } footer: {
-                        Text("Offers ThUNER's controls (listening, silence threshold, input level, now playing, radio mode, Tuneshine brightness and more) to Twist Commando's App Link, to put on any knob or pad.")
+                        Text("Offers ThUNER's controls and meters to Twist Commando's App Link, to put on any knob or pad.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Section("On this Mac") {
-                        Toggle("Animate menu bar icon while playing", isOn: $model.animateMenuBarIcon)
+                    Section {
+                        Text("ThUNER's actions are in the Shortcuts app (search for ThUNER), for automations, Siri and Spotlight.")
+                            .foregroundStyle(.secondary)
+                        Button("Open Shortcuts") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Shortcuts.app")) }
+                    } header: {
+                        Text("Shortcuts")
                     }
                 }
                 .formStyle(.grouped)
@@ -625,12 +632,9 @@ private struct StreamingSettings: View {
         Form {
             if !model.streamSource.isEmpty {
                 Section("Stream") {
-                    if let problem = model.streamProblem {
-                        Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    }
-                    StreamMeter(model: model)
-                    if let details = streamDetails {
-                        Text(details).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    StreamMeter(model: model, compact: true)
+                    LabeledContent("Latency, totals and earlier sessions") {
+                        Button("Open Stream Window") { AppWindows.shared.show(.stream) }
                     }
                 }
             }
@@ -709,23 +713,6 @@ private struct StreamingSettings: View {
         .onDisappear { model.streamPassword = passwordDraft }
     }
 
-    /// Everything else about the stream, in a line or two under the meter.
-    private var streamDetails: String? {
-        guard let stats = model.streamStats else { return nil }
-        var parts: [String] = []
-        if let status = model.streamSenderStatus, status.sharing { parts.append("\(status.source ?? "?") on \(AppModel.shown(status.host))") }
-        parts.append("\(Self.rate(stats.sampleRate)) 24-bit")
-        if stats.method == .resilient { parts.append(String(format: "jitter %.1f ms", stats.jitterMs)) }
-        parts.append(String(format: "clocks %+.0f ppm", stats.driftPPM))
-        parts.append("\(stats.received) packets, \(stats.lost) lost, \(stats.late) late")
-        parts.append("\(stats.underruns) dropouts")
-        if let resends = model.streamResends, resends.requested > 0 {
-            parts.append("\(resends.requested) resends asked, \(resends.recovered) recovered")
-        }
-        if stats.method == .raw { parts.append("\(stats.adjustments) clock corrections") }
-        return parts.joined(separator: " · ")
-    }
-
     private var methodHelp: String {
         switch model.streamMethod {
         case .raw:
@@ -734,9 +721,49 @@ private struct StreamingSettings: View {
             "Resilient puts packets back in order, asks again for lost ones, grows the buffer to cover the network's measured jitter (and room for resends after a loss; it shrinks again when things calm down), follows the other Mac's clock smoothly, and fades over audio that still doesn't arrive. A few ms on Ethernet, more on Wi-Fi."
         }
     }
+}
 
-    private static func rate(_ hz: Double) -> String {
-        hz.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(hz / 1000)) kHz" : String(format: "%.1f kHz", hz / 1000)
+/// Settings → Listening → Show and Name Inputs…: which inputs the menu offers, and names for them.
+private struct InputsSheet: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    ForEach(model.devices) { device in
+                        Toggle(isOn: Binding(
+                            get: { !model.hiddenInputUIDs.contains(device.uid) },
+                            set: { model.setInput(device, visible: $0) }
+                        )) {
+                            HStack {
+                                Text(device.name)
+                                Spacer()
+                                Text(device.inputChannels == 1 ? "1 channel" : "\(device.inputChannels) channels")
+                                    .foregroundStyle(.secondary)
+                                if device.uid == model.inputDeviceUID {
+                                    Text("In use").font(.caption).foregroundStyle(.green)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Shown in the menu")
+                } footer: {
+                    Text("Hide inputs you'd never listen to, like the ones Zoom, Teams or Steam add.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                InputNameSection(model: model)
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 480, height: 520)
     }
 }
 
@@ -782,7 +809,7 @@ private struct InputNameSection: View {
         } header: {
             Text("Input names")
         } footer: {
-            Text("A name for the input (or channel pair) ThUNER listens to, like \"Turntable\" for an interface's 3–4. Shown in the menu, and to Macs listening to this one's stream.")
+            Text("A name for the input (or channel pair) in use, like \"Turntable\" for an interface's 3–4. Shown in the menu, and to Macs listening to this one's stream.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

@@ -38,6 +38,8 @@ final class PeerLink: NSObject, @unchecked Sendable {
     var onMessage: ((Message) -> Void)?
     /// Called on the main queue when other ThUNERs appear or disappear, with their host names.
     var onPeersChanged: (([String]) -> Void)?
+    /// A ThUNER's addresses changed (a Mac that joined Wi-Fi as well as Ethernet, say).
+    var onAddressesChanged: (() -> Void)?
     private var peerHosts: [String: String] = [:]
 
     private let instance = UUID().uuidString
@@ -50,6 +52,9 @@ final class PeerLink: NSObject, @unchecked Sendable {
     private var advertisement: NetService?
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []
+    /// Every ThUNER service found, to look up again when a Mac's addresses change.
+    private var services: [String: NetService] = [:]
+    private var lastRefresh = Date.distantPast
     private var peers: [String: [sockaddr_in]] = [:]
     /// Lookups tried so far per service, while it's still around (cleared when it goes).
     private var resolveAttempts: [String: Int] = [:]
@@ -126,6 +131,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
 
     fileprivate func found(_ service: NetService) {
         guard service.name != instance else { return }
+        services[service.name] = service
         resolveAttempts[service.name] = 0
         resolve(service)
     }
@@ -167,6 +173,13 @@ final class PeerLink: NSObject, @unchecked Sendable {
         }
         if peers[service.name] == nil {
             log.notice("Found another ThUNER at \(service.hostName ?? "?", privacy: .public)")
+        } else if Set(peers[service.name]!.map(\.sin_addr.s_addr)) != Set(addresses.map(\.sin_addr.s_addr)) {
+            log.notice("\(service.hostName ?? "?", privacy: .public) is now at \(addresses.map { Self.string($0.sin_addr) }.joined(separator: ", "), privacy: .public)")
+            peers[service.name] = addresses
+            onAddressesChanged?()
+        } else {
+            // Same addresses: keep the order (the one it's heard from first).
+            return
         }
         peers[service.name] = addresses
         peerHosts[service.name] = (service.hostName ?? service.name).replacingOccurrences(of: ".local.", with: "")
@@ -176,6 +189,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
     fileprivate func removed(_ service: NetService) {
         resolving.removeAll { $0 === service }
         resolveAttempts[service.name] = nil
+        services[service.name] = nil
         peers[service.name] = nil
         peerHosts[service.name] = nil
         onPeersChanged?(Array(peerHosts.values).sorted())
@@ -194,10 +208,12 @@ final class PeerLink: NSObject, @unchecked Sendable {
         guard n > 0 else { return }
         guard sender.sin_family == sa_family_t(AF_INET), isKnownPeer(sender.sin_addr) else {
             log.notice("Ignoring a message from \(Self.string(sender.sin_addr), privacy: .public): not a ThUNER found over Bonjour")
+            refreshAddresses()
             return
         }
         guard let message = try? JSONDecoder().decode(Message.self, from: Data(buffer[0..<n])),
               message.instance != instance else { return }
+        preferAddress(sender.sin_addr)
         if let id = message.id {
             guard !recentMessageIDs.contains(id) else { return }
             recentMessageIDs.append(id)
@@ -211,6 +227,35 @@ final class PeerLink: NSObject, @unchecked Sendable {
 extension PeerLink {
     func isKnownPeer(_ address: in_addr) -> Bool {
         peers.values.contains { $0.contains { $0.sin_addr.s_addr == address.s_addr } }
+    }
+
+    /// Looks every ThUNER up again, at most every 30 seconds: a message from an address we don't know may be a
+    /// known Mac that has a new one (it joined Wi-Fi as well as Ethernet, or got a new lease). Bonjour stays the
+    /// only way in; this just asks it again.
+    func refreshAddresses() {
+        guard Date().timeIntervalSince(lastRefresh) >= 30, !services.isEmpty else { return }
+        lastRefresh = Date()
+        for service in services.values where !resolving.contains(where: { $0 === service }) {
+            service.stop()
+            resolve(service)
+        }
+    }
+
+    /// A Mac with Ethernet and Wi-Fi on the same network has two addresses; it sends from its primary one, so the
+    /// one it was last heard from goes first (where messages and the stream go).
+    func preferAddress(_ address: in_addr) {
+        for (name, list) in peers {
+            guard let i = list.firstIndex(where: { $0.sin_addr.s_addr == address.s_addr }), i > 0 else { continue }
+            var reordered = list
+            reordered.insert(reordered.remove(at: i), at: 0)
+            peers[name] = reordered
+        }
+    }
+
+    /// Every IPv4 address of the ThUNER on `host`.
+    func addresses(ofHost host: String) -> [in_addr] {
+        guard let name = peerHosts.first(where: { $0.value == host })?.key else { return [] }
+        return peers[name]?.map(\.sin_addr) ?? []
     }
 
     /// The IPv4 address of the ThUNER on `host` (a name as passed to `onPeersChanged`), if it's been found.

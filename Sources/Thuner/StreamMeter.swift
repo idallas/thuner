@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import ThunerCore
 
@@ -42,7 +43,12 @@ final class StreamMeterFeed {
         timer = nil
     }
 
+    /// The window showing the meter: while it can't be seen (behind other windows, minimised, another Space) the
+    /// numbers aren't read, so nothing redraws.
+    @ObservationIgnored weak var window: NSWindow?
+
     private func poll() {
+        if let window, !window.occlusionState.contains(.visible) { return }
         guard let reading = model?.streamReading() else {
             if stats != nil {
                 stats = nil
@@ -75,6 +81,7 @@ struct StreamMeter: View {
         Group {
             if compact { compactBody } else { fullBody }
         }
+        .background(WindowReader { feed.window = $0 })
         .onAppear { feed.start(model) }
         .onDisappear { feed.stop() }
     }
@@ -93,33 +100,38 @@ struct StreamMeter: View {
                     Text(summary).monospacedDigit().foregroundStyle(.secondary)
                 }
                 .font(.system(size: 11))
-                BufferBar(feed: feed, scaleMs: scaleMs)
-                    .frame(height: 6)
-                HStack(spacing: 10) {
-                    levelPair(sourceName, model.streamSourceLevels)
-                    levelPair("Here", model.streamPlayedLevels)
+                // The bars only once audio flows; until then the line above says it's listening and hears nothing.
+                if streaming {
+                    BufferBar(feed: feed, scaleMs: scaleMs)
+                        .frame(height: 6)
+                    HStack(spacing: 10) {
+                        levelPair(sourceName, .source)
+                        levelPair("Here", .played)
+                    }
                 }
             }
         }
-        .allowsHitTesting(false)
-        .help(model.streamProblem ?? "Listening to \(AppModel.shown(model.streamSource))'s stream. Details in Settings → Streaming.")
+        .help(model.streamProblem ?? "Listening to \(AppModel.shown(model.streamSource))'s stream. Click for the Stream window.")
+    }
+
+    private var streaming: Bool {
+        model.streamProblem == nil && !model.streamQuiet && feed.stats?.playing == true
     }
 
     private var sourceName: String {
         model.streamSource == AppModel.streamThisMac ? "Input" : AppModel.shown(model.streamSource)
     }
 
-    private func levelPair(_ name: String, _ levels: AppModel.Stereo?) -> some View {
+    private func levelPair(_ name: String, _ side: LiveLevels.Side) -> some View {
         HStack(spacing: 4) {
             Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-            StereoLevelMeter(levels: levels).frame(height: 7)
+            LiveLevels(model: model, side: side, readout: false)
         }
     }
 
     private var summary: String {
         if let problem = model.streamProblem { return problem }
-        if model.streamQuiet { return "Nothing playing" }
-        guard let stats = feed.stats, stats.playing else { return "Waiting for audio" }
+        guard streaming else { return "Listening · no audio" }
         let latency = feed.latency.map { String(format: "≈ %.0f ms", $0.totalMs) } ?? String(format: "%.1f ms buffer", feed.bufferMs)
         // Only recent ones (the graph's 30 seconds): a count since the stream began only ever grows, and looks
         // alarming hours in even when all's well. Settings → Streaming has the total.
@@ -152,8 +164,8 @@ struct StreamMeter: View {
                     Spacer()
                     Text("peak, -60 to 0 dB").font(.caption2).foregroundStyle(.secondary)
                 }
-                levelRow("At \(sourceName)", model.streamSourceLevels)
-                levelRow("Here", model.streamPlayedLevels)
+                levelRow("At \(sourceName)", .source)
+                levelRow("Here", .played)
             }
 
             if let stats = feed.stats, stats.playing {
@@ -180,16 +192,12 @@ struct StreamMeter: View {
         .padding(.vertical, 4)
     }
 
-    private func levelRow(_ name: String, _ levels: AppModel.Stereo?) -> some View {
+    private func levelRow(_ name: String, _ side: LiveLevels.Side) -> some View {
         HStack(spacing: 8) {
             Text(name).font(.caption).frame(width: 80, alignment: .leading).lineLimit(1)
-            StereoLevelMeter(levels: levels).frame(height: 10)
-            Text(levels.map { Self.db(max($0.left, $0.right)) } ?? "—")
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
+            LiveLevels(model: model, side: side, readout: true)
         }
     }
-
-    private static func db(_ value: Double) -> String { value <= -60 ? "-∞" : "\(Int(value.rounded())) dB" }
 
     private var legend: some View {
         HStack(spacing: 10) {
@@ -227,25 +235,26 @@ struct BufferBar: View {
     let feed: StreamMeterFeed
     let scaleMs: Double
 
+    // Drawn rather than laid out: it changes ten times a second, and sized views made SwiftUI lay out the whole
+    // window each time.
     var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                if let stats = feed.stats, stats.playing {
-                    if stats.method == .resilient, feed.jitterMs > 0 {
-                        Rectangle().fill(Color.orange.opacity(0.3))
-                            .frame(width: w * fraction(min(feed.jitterMs, feed.targetMs)))
-                            .offset(x: w * fraction(feed.targetMs - feed.jitterMs))
-                    }
-                    Capsule().fill(Color.accentColor)
-                        .frame(width: max(w * fraction(feed.bufferMs), 3))
-                        .animation(.linear(duration: 0.1), value: feed.bufferMs)
-                    Rectangle().fill(.primary.opacity(0.6)).frame(width: 2)
-                        .offset(x: w * fraction(feed.targetMs) - 1)
-                }
+        let stats = feed.stats
+        let buffer = feed.bufferMs, target = feed.targetMs, jitter = feed.jitterMs
+        Canvas { context, size in
+            let w = size.width, h = size.height
+            let track = Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: h / 2)
+            context.clip(to: track)
+            context.fill(track, with: .style(.quaternary))
+            guard let stats, stats.playing else { return }
+            if stats.method == .resilient, jitter > 0 {
+                let x = w * fraction(target - jitter)
+                context.fill(Path(CGRect(x: x, y: 0, width: w * fraction(min(jitter, target)), height: h)),
+                             with: .color(.orange.opacity(0.3)))
             }
-            .clipShape(Capsule())
+            let filled = max(w * fraction(buffer), 3)
+            context.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: filled, height: h), cornerRadius: h / 2),
+                         with: .color(.accentColor))
+            context.fill(Path(CGRect(x: w * fraction(target) - 1, y: 0, width: 2, height: h)), with: .color(.primary.opacity(0.6)))
         }
     }
 
@@ -326,7 +335,6 @@ struct LatencyBar: View {
                     }
                 }
                 .clipShape(Capsule())
-                .animation(.linear(duration: 0.2), value: latency)
             }
             .frame(height: 10)
             HStack(spacing: 12) {
@@ -348,29 +356,65 @@ struct LatencyBar: View {
 struct StereoLevelMeter: View {
     let levels: AppModel.Stereo?
 
+    private static let gradient = Gradient(stops: [
+        .init(color: .green, location: 0), .init(color: .green, location: 0.79),
+        .init(color: .yellow, location: 0.8), .init(color: .yellow, location: 0.94),
+        .init(color: .red, location: 0.95), .init(color: .red, location: 1),
+    ])
+
+    // Drawn rather than laid out: it changes 20 times a second (see BufferBar).
     var body: some View {
-        VStack(spacing: 1) {
-            bar(levels?.left)
-            bar(levels?.right)
+        let left = levels?.left, right = levels?.right
+        Canvas { context, size in
+            let h = (size.height - 1) / 2
+            for (i, db) in [left, right].enumerated() {
+                let row = CGRect(x: 0, y: Double(i) * (h + 1), width: size.width, height: h)
+                let shape = Path(roundedRect: row, cornerRadius: 1)
+                context.fill(shape, with: .style(.quaternary))
+                guard let db else { continue }
+                let f = min(max((db + 60) / 60, 0), 1)
+                var bar = context
+                bar.clip(to: Path(CGRect(x: 0, y: row.minY, width: size.width * f, height: h)))
+                bar.fill(shape, with: .linearGradient(Self.gradient, startPoint: CGPoint(x: 0, y: row.midY),
+                                                      endPoint: CGPoint(x: size.width, y: row.midY)))
+            }
+        }
+    }
+}
+
+/// One side's level meter (and its dB readout), reading the levels itself: they change 20 times a second, and read
+/// in StreamMeter's body they rebuilt the whole meter (latency bar, history graph and all) every time.
+private struct LiveLevels: View {
+    enum Side { case source, played }
+    let model: AppModel
+    let side: Side
+    let readout: Bool
+
+    var body: some View {
+        let levels = side == .source ? model.streamSourceLevels : model.streamPlayedLevels
+        HStack(spacing: 8) {
+            StereoLevelMeter(levels: levels).frame(height: readout ? 10 : 7)
+            if readout {
+                Text(levels.map { Self.db(max($0.left, $0.right)) } ?? "—")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
+            }
         }
     }
 
-    private func bar(_ db: Double?) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Rectangle().fill(.quaternary)
-                if let db {
-                    let f = min(max((db + 60) / 60, 0), 1)
-                    Rectangle().fill(LinearGradient(stops: [
-                        .init(color: .green, location: 0), .init(color: .green, location: 0.79),
-                        .init(color: .yellow, location: 0.8), .init(color: .yellow, location: 0.94),
-                        .init(color: .red, location: 0.95), .init(color: .red, location: 1),
-                    ], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: geo.size.width)
-                    .mask(alignment: .leading) { Rectangle().frame(width: geo.size.width * f) }
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 1))
-        }
+    private static func db(_ value: Double) -> String { value <= -60 ? "-∞" : "\(Int(value.rounded())) dB" }
+}
+
+/// Hands over the window a view is in, once it's in one.
+struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { [weak view] in found(view?.window) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        if view.window != nil { DispatchQueue.main.async { [weak view] in found(view?.window) } }
     }
 }
