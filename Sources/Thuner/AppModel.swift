@@ -288,8 +288,10 @@ final class AppModel {
     var panelPinned: Bool { didSet { save(panelPinned, "panelPinned") } }
     /// What the menu bar icon shows.
     var menuBarIconKind: MenuBarIcon.Kind {
+        // A pause comes first: the point is to see at a glance whether this Mac's mic is listening.
+        if micEnabled, pausedManually { return .paused(auto: false) }
+        if micEnabled, autoPaused { return .paused(auto: true) }
         if peerHasControl { return .elsewhere(playing: remote?.track != nil) }
-        if pausedManually || autoPaused { return .idle }
         if let level = iconLevel { return .level(level) }
         if activePlayer != nil { return .playing }
         return switch machine.state {

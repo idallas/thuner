@@ -11,6 +11,9 @@ enum MenuBarIcon {
         case level(Int)
         /// Another Mac (the turntable Mac) is listening: the gauge shows its state, with radio waves beside it.
         case elsewhere(playing: Bool)
+        /// Listening is paused: the gauge dimmed, with pause bars beside it, or a "z" for an auto-pause (which
+        /// wakes by itself when music starts).
+        case paused(auto: Bool)
     }
 
     static let levels = 7
@@ -28,17 +31,36 @@ enum MenuBarIcon {
 
     private static func draw(_ kind: Kind) -> NSImage {
         let isElsewhere: Bool
+        var pausedAuto: Bool?
         let gaugeKind: Kind
-        if case .elsewhere(let playing) = kind {
+        switch kind {
+        case .elsewhere(let playing):
             isElsewhere = true
             gaugeKind = playing ? .playing : .identifying
-        } else {
+        case .paused(let auto):
+            isElsewhere = false
+            pausedAuto = auto
+            gaugeKind = .idle
+        default:
             isElsewhere = false
             gaugeKind = kind
         }
-        let image = NSImage(size: NSSize(width: isElsewhere ? 27 : 20, height: 18), flipped: false) { _ in
-            drawGauge(gaugeKind)
+        let wide = isElsewhere || pausedAuto != nil
+        let image = NSImage(size: NSSize(width: wide ? 27 : 20, height: 18), flipped: false) { _ in
+            if pausedAuto != nil {
+                // Dimmed: the gauge at half strength, drawn into a layer so its parts don't add up.
+                NSGraphicsContext.current?.cgContext.setAlpha(0.45)
+                NSGraphicsContext.current?.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+                drawGauge(gaugeKind)
+                NSGraphicsContext.current?.cgContext.endTransparencyLayer()
+                NSGraphicsContext.current?.cgContext.setAlpha(1)
+            } else {
+                drawGauge(gaugeKind)
+            }
             if isElsewhere { drawWaves(around: CGPoint(x: 20.5, y: 9)) }
+            if let auto = pausedAuto {
+                if auto { drawSleep(at: CGPoint(x: 21, y: 3)) } else { drawPauseBars(at: CGPoint(x: 21.5, y: 3)) }
+            }
             return true
         }
         image.isTemplate = true
@@ -47,8 +69,31 @@ enum MenuBarIcon {
         case .identifying: "ThUNER: identifying"
         case .playing, .level: "ThUNER: playing"
         case .elsewhere: "ThUNER: the turntable Mac is listening"
+        case .paused(let auto): auto ? "ThUNER: paused until music plays" : "ThUNER: listening paused"
         }
         return image
+    }
+
+    /// Two short vertical bars, the pause symbol.
+    private static func drawPauseBars(at origin: CGPoint) {
+        NSColor.black.set()
+        for dx in [CGFloat(0), 3.6] {
+            NSBezierPath(roundedRect: CGRect(x: origin.x + dx, y: origin.y, width: 2, height: 8), xRadius: 0.8, yRadius: 0.8).fill()
+        }
+    }
+
+    /// A small "z", for an auto-pause that wakes by itself.
+    private static func drawSleep(at origin: CGPoint) {
+        let z = NSBezierPath()
+        z.move(to: CGPoint(x: origin.x, y: origin.y + 7))
+        z.line(to: CGPoint(x: origin.x + 5, y: origin.y + 7))
+        z.line(to: CGPoint(x: origin.x, y: origin.y))
+        z.line(to: CGPoint(x: origin.x + 5, y: origin.y))
+        z.lineWidth = 1.5
+        z.lineCapStyle = .round
+        z.lineJoinStyle = .round
+        NSColor.black.set()
+        z.stroke()
     }
 
     /// Two short arcs opening to the right, like a broadcast symbol.
@@ -95,6 +140,7 @@ enum MenuBarIcon {
         case .playing: 90
         case .level: tickDegrees(litFrom!)
         case .elsewhere: 90  // drawn as .playing or .identifying
+        case .paused: 148  // drawn as .idle
         }
         let a = needleDegrees * .pi / 180
         let needle = NSBezierPath()
