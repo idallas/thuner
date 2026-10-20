@@ -1,6 +1,15 @@
 {
-  "originHash" : "31f7faa4739b71e69b19bea6cbcc2c95bfc19cc288b878f2915b43b124248a18",
+  "originHash" : "9d27c7d9ff9ce24845d39e31efdb99e2ed60d709aa3dbace9fce0b0dcf805128",
   "pins" : [
+    {
+      "identity" : "applug",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/idallas/applug",
+      "state" : {
+        "revision" : "36601b03ffc2168d0fa603463f68cdcab2f173f8",
+        "version" : "0.1.0"
+      }
+    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",

@@ -19,7 +19,7 @@ A macOS menu bar app that knows what's playing (from a turntable, the room, a br
   - to Last.fm, with an offline queue and duplicate detection
   - to ListenBrainz-compatible servers (ListenBrainz, Maloja, Koito, multi-scrobbler)
   - with a radio mode for not scrobbling at all
-- **Can be controlled.** Twist Commando's App Link, plus a small HTTP API with Server-Sent Events. Both use one control list (`ControlSurface`).
+- **Can be controlled.** Through [Applug](https://github.com/idallas/applug), by any app on the Mac that speaks it (Twist Commando, Action Hero), plus a small HTTP API with Server-Sent Events. Both use one control list (`ControlSurface`).
 
 ## Requirements
 

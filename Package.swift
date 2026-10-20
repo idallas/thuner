@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+        // Offering ThUNER's controls to other apps on the Mac (Twist Commando, Action Hero, …).
+        .package(url: "https://github.com/idallas/applug", from: "0.1.0"),
     ],
     targets: [
         // Pure logic (state machine, level gate, track identity). No Apple media frameworks, so it's easy to test.
@@ -13,7 +15,7 @@ let package = Package(
         // The menu bar app: Core Audio / AVAudioEngine capture, ShazamKit matching, Tuneshine, LAN coordination.
         .executableTarget(
             name: "Thuner",
-            dependencies: ["ThunerCore", .product(name: "Sparkle", package: "Sparkle")],
+            dependencies: ["ThunerCore", .product(name: "Sparkle", package: "Sparkle"), .product(name: "Applug", package: "applug")],
             // Sparkle.framework is copied into Contents/Frameworks by Scripts/build-app.sh.
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
         // The widget (WidgetKit extension), packaged into Contents/PlugIns/ThunerWidget.appex by Scripts/build-app.sh.

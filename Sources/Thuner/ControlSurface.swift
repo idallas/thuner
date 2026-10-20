@@ -1,7 +1,7 @@
 import Foundation
 
 /// ThUNER's controls, defined once: what they are, their current state, and what turning or pressing them
-/// does. Adapters expose them to the outside: Twist Commando's App Link and ThUNER's own HTTP API.
+/// does. Adapters expose them to the outside: Applug (Twist Commando, Action Hero and other apps on the Mac) and ThUNER's own HTTP API.
 @MainActor
 final class ControlSurface {
     enum Kind: String, Codable, Sendable {

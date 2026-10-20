@@ -232,15 +232,15 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
-                        Toggle("Twist Commando", isOn: $model.twistCommandoEnabled)
+                        Toggle("Offer ThUNER's controls to other apps", isOn: $model.twistCommandoEnabled)
                         if model.twistCommandoEnabled {
-                            LabeledContent("Status", value: model.twistCommandoVersion.map { "Connected (Twist Commando \($0))" }
-                                ?? "Waiting for Twist Commando")
+                            LabeledContent("Using them now", value: model.controlConsumers.isEmpty
+                                ? "No apps" : model.controlConsumers.joined(separator: ", "))
                         }
                     } header: {
-                        Text("Controllers")
+                        Text("Other apps")
                     } footer: {
-                        Text("Offers ThUNER's controls and meters to Twist Commando's App Link, to put on any knob or pad.")
+                        Text("Listening, the silence threshold, levels and meters, now playing, radio mode, the Tuneshine and more, for apps on this Mac that speak Applug, like Twist Commando (any knob or pad) and Action Hero. Older Twist Commandos connect over App Link.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {

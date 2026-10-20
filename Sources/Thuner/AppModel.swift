@@ -4,6 +4,7 @@ import Foundation
 import Observation
 import ServiceManagement
 import WidgetKit
+import Applug
 import ThunerCore
 import os
 
@@ -161,9 +162,9 @@ final class AppModel {
     @ObservationIgnored private var streamLevelTimer: Timer?
 
     /// Levels are read 20 times a second while something shows them: this Mac's stream meters (while listening to
-    /// a stream), or a meter Twist Commando is subscribed to.
+    /// a stream), or a meter another app (Twist Commando, Action Hero) is watching.
     private func updateLevelPolling() {
-        let wanted = streamReceiver != nil || (twistCommandoEnabled && !appLink.subscribedMeters.isEmpty)
+        let wanted = streamReceiver != nil || (twistCommandoEnabled && !applug.watchedMeters.isEmpty)
         if wanted, streamLevelTimer == nil {
             streamLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.pollLevels() }
@@ -180,13 +181,13 @@ final class AppModel {
     }
 
     private func pollLevels() {
-        // Peaks since the last read go to Twist Commando as they are (it does its own falloff).
+        // Peaks since the last read go to the watching apps as they are (they do their own falloff).
         let input = capture.peaks.takeIfFresh()
         let stream = streamReceiver?.takeLevels()
-        if twistCommandoEnabled, !appLink.subscribedMeters.isEmpty {
-            if let input { appLink.sendMeter("inputLevel", levels: [input.left, input.right]) }
-            if let source = stream?.source { appLink.sendMeter("streamSourceLevel", levels: [source.left, source.right]) }
-            if let played = stream?.received { appLink.sendMeter("streamLevel", levels: [played.left, played.right]) }
+        if twistCommandoEnabled, !applug.watchedMeters.isEmpty {
+            if let input { applug.sendMeter("inputLevel", levels: [input.left, input.right]) }
+            if let source = stream?.source { applug.sendMeter("streamSourceLevel", levels: [source.left, source.right]) }
+            if let played = stream?.received { applug.sendMeter("streamLevel", levels: [played.left, played.right]) }
         }
         guard let stream else { return }
         // On screen they jump up and fall back 15 dB a second, like a hardware meter.
@@ -213,19 +214,22 @@ final class AppModel {
     private(set) var micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @ObservationIgnored private var networkStarted = false
 
-    /// Offer ThUNER's controls to Twist Commando over App Link.
+    /// Offer ThUNER's controls to other apps on this Mac over Applug (Action Hero, Twist Commando; older Twist
+    /// Commandos over App Link). Kept under its old name so the setting carries over.
     var twistCommandoEnabled: Bool {
         didSet {
             save(twistCommandoEnabled, "twistCommandoEnabled")
-            twistCommandoEnabled ? appLink.start() : appLink.stop()
+            twistCommandoEnabled ? applug.start() : applug.stop()
         }
     }
-    /// Twist Commando's version while App Link is connected.
+    /// Twist Commando's version while it's connected.
     private(set) var twistCommandoVersion: String?
+    /// The apps using ThUNER's controls now ("Twist Commando 0.14.0", "Action Hero").
+    private(set) var controlConsumers: [String] = []
     /// The Tuneshine's brightness (1–100), when known.
     private(set) var tuneshineBrightness: Int?
     @ObservationIgnored private var brightnessWrite: DispatchWorkItem?
-    @ObservationIgnored private lazy var appLink = makeAppLink()
+    @ObservationIgnored private lazy var applug = makeApplug()
 
     /// Serve the web display (a pretend Tuneshine or large cover for any screen on the network).
     var webDisplayEnabled: Bool {
@@ -980,7 +984,7 @@ final class AppModel {
         guard !networkStarted else { return }
         networkStarted = true
         connectAPI()
-        if twistCommandoEnabled { appLink.start() }
+        if twistCommandoEnabled { applug.start() }
         peers.start()
         streamSender.start()
         applyStreamReceiver()
@@ -1458,33 +1462,54 @@ final class AppModel {
     /// ThUNER's controls, shared by every adapter (Twist Commando's App Link, the HTTP API).
     @ObservationIgnored private(set) lazy var controls = ControlSurface(model: self)
 
-    private func makeAppLink() -> AppLinkClient {
-        let link = AppLinkClient(controls: controls.definitions.map { definition in
-            let kind: AppLinkClient.Kind = switch definition.kind {
-            case .level: .level
-            case .toggle: .toggle
-            case .button: .button
-            }
-            return AppLinkClient.Control(id: definition.id, name: definition.name, kind: kind, group: definition.group,
-                                         meterChannels: definition.meterChannels)
-        })
-        link.onMeterSubscriptionsChange = { [weak self] in self?.updateLevelPolling() }
-        link.onTurn = { [weak self] id, value, _ in
-            if let value { self?.controls.turn(id, to: value) }
-        }
-        link.onPress = { [weak self] id, down in
-            if down { self?.controls.press(id) }
-        }
-        link.onConnectionChange = { [weak self] version in
-            self?.twistCommandoVersion = version
-            if version != nil { self?.note("Connected to Twist Commando") }
-        }
+    /// ThUNER's controls for other apps on this Mac (Applug), with Twist Commando's App Link port too for versions
+    /// that don't speak Applug yet (only while Twist Commando is running).
+    private func makeApplug() -> ApplugProvider {
         controls.refresh()
-        for (id, state) in controls.states { link.set(id, value: state.value, text: state.text, on: state.on) }
-        controls.observers.append { [weak link] id, state in
-            link?.set(id, value: state.value, text: state.text, on: state.on)
+        let states = controls.states
+        let provider = ApplugProvider(name: "ThUNER", controls: controls.definitions.map { definition in
+            let state = states[definition.id]
+            let kind: Control.Kind = if definition.meterChannels != nil { .meter } else {
+                switch definition.kind {
+                case .level: .level
+                case .toggle: .toggle
+                case .button: .button
+                }
+            }
+            return Control(id: definition.id, name: definition.name, kind: kind,
+                           value: kind == .meter ? nil : state?.value, text: state?.text, on: state?.on,
+                           group: definition.group, channels: definition.meterChannels, readOnly: definition.readOnly)
+        })
+        provider.appLinkCompatibility = AppLinkCompatibility()
+        provider.onWatchedMetersChange = { [weak self] meters in
+            self?.logger.notice("Meters wanted: \(meters.sorted().joined(separator: ", "), privacy: .public)")
+            self?.updateLevelPolling()
         }
-        return link
+        provider.onTurn = { [weak self] turn in
+            if let value = turn.value { self?.controls.turn(turn.id, to: value) }
+        }
+        provider.onPress = { [weak self] press in
+            if press.down { self?.controls.press(press.id) }
+        }
+        provider.onConsumersChange = { [weak self] consumers in
+            guard let self else { return }
+            let twist = consumers.first { $0.app.hasPrefix("com.twistcommando.") }
+            let wasTwist = twistCommandoVersion != nil
+            twistCommandoVersion = twist.map { $0.version ?? "" }
+            if twist != nil, !wasTwist { note("Connected to Twist Commando") }
+            let names = consumers.map { [$0.name, $0.version].compactMap { $0 }.joined(separator: " ") }
+            for name in Set(names).subtracting(controlConsumers) where !name.hasPrefix("Twist Commando") {
+                note("\(name) is using ThUNER's controls")
+            }
+            controlConsumers = names
+        }
+        controls.observers.append { [weak provider] id, state in
+            guard let provider else { return }
+            if provider.controls.first(where: { $0.id == id })?.kind == .meter { return }
+            provider.set(id, value: state.value, text: state.text, on: state.on)
+            if state.text == nil { provider.clearText(id) }
+        }
+        return provider
     }
 
     /// Hooks the HTTP API up to the controls: their definitions and live state, the token, and actions.
