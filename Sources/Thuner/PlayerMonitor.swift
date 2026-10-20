@@ -160,10 +160,48 @@ actor ArtworkLookup {
         }
         // Prefer the same album, so a compilation doesn't win over the original release.
         let best = candidates.first { $0.collectionName == track.album } ?? candidates.first
-        guard let best, let art = best.artworkUrl100 else { return nil }
+        guard let best, let art = best.artworkUrl100 else {
+            // Not in Apple's store as a song (a track from your own library, or one the label pulled), but its
+            // album often is: the same cover.
+            return await albumArtwork(track).map { Found(url: $0) }
+        }
         return Found(
             url: URL(string: art.replacingOccurrences(of: "100x100bb", with: "600x600bb")),
             appleMusicID: best.trackId.map(String.init),
             duration: best.trackTimeMillis.map { $0 / 1000 })
+    }
+
+    /// The album's cover from Apple's catalogue (any song from it), if the artist and album name match.
+    private func albumArtwork(_ track: Track) async -> URL? {
+        guard let album = track.album, !album.isEmpty else { return nil }
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [
+            // Songs, not albums: the album search misses some albums whose songs it finds, and every song on
+            // the album carries the album's cover.
+            URLQueryItem(name: "term", value: "\(track.artist) \(album)"),
+            URLQueryItem(name: "entity", value: "song"),
+            URLQueryItem(name: "limit", value: "25"),
+        ]
+        struct Response: Decodable {
+            struct Item: Decodable {
+                var artistName: String?
+                var collectionName: String?
+                var artworkUrl100: String?
+            }
+            var results: [Item]
+        }
+        guard let url = components.url,
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let response = try? JSONDecoder().decode(Response.self, from: data) else { return nil }
+        func simple(_ s: String) -> String {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+        }
+        let artist = simple(track.artist), wanted = simple(album)
+        let match = response.results.first {
+            simple($0.artistName ?? "") == artist && simple($0.collectionName ?? "").hasPrefix(wanted)
+        }
+        guard let art = match?.artworkUrl100 else { return nil }
+        return URL(string: art.replacingOccurrences(of: "100x100bb", with: "600x600bb"))
     }
 }

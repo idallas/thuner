@@ -99,6 +99,8 @@ struct MenuView: View {
             } placeholder: {
                 Image(systemName: "opticaldisc").font(.system(size: 34)).foregroundStyle(.tertiary)
             }
+            // A new image view for each cover: when a track had none, the old view kept showing the last track's.
+            .id(model.shownTrack?.artworkURL)
             .frame(width: 92, height: 92)
             .background(.quaternary)
             .overlay {
