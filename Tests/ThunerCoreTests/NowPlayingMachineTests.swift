@@ -213,3 +213,40 @@ private func match(_ track: Track, offset: TimeInterval = 30, at s: TimeInterval
         #expect(m.handle(.match(MatchObservation(track: b, offset: 42, observedAt: at(24))), at: at(24)) == [.push(b)])
     }
 }
+
+@Suite struct IdentifyBackoffTests {
+    @Test func missesSlowDownThenNewAudioResets() {
+        var machine = NowPlayingMachine()
+        var now = Date(timeIntervalSince1970: 1_000_000)
+        _ = machine.audioStarted(at: now)
+        var gaps: [TimeInterval] = []
+        for _ in 0..<8 {
+            now = machine.nextQueryAt!
+            #expect(machine.tick(at: now) == [.query])
+            _ = machine.handle(.noMatch, at: now)
+            gaps.append(machine.nextQueryAt!.timeIntervalSince(now))
+        }
+        #expect(gaps == [12, 12, 12, 24, 48, 96, 120, 120])
+        _ = machine.audioStopped(at: now)
+        _ = machine.audioStarted(at: now + 5)
+        #expect(machine.identifyMisses == 0)
+    }
+}
+
+@Suite struct TrackGapTests {
+    @Test func aGapBringsTheNextQueryForwardAndResetsTheBackoff() {
+        var machine = NowPlayingMachine()
+        var now = Date(timeIntervalSince1970: 1_000_000)
+        _ = machine.audioStarted(at: now)
+        for _ in 0..<7 {
+            now = machine.nextQueryAt!
+            _ = machine.tick(at: now)
+            _ = machine.handle(.noMatch, at: now)
+        }
+        #expect(machine.nextQueryAt!.timeIntervalSince(now) == 120)
+        now += 30
+        _ = machine.gapEnded(at: now)
+        #expect(machine.identifyMisses == 0)
+        #expect(machine.nextQueryAt == now + 10)
+    }
+}

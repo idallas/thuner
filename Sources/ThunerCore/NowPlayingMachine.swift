@@ -23,6 +23,11 @@ public struct NowPlayingMachine: Equatable, Sendable {
         public var sampleDuration: TimeInterval = 10
         /// Query interval while Identifying.
         public var identifyInterval: TimeInterval = 12
+        /// After this many misses in a row while Identifying, the wait doubles each time, up to
+        /// `maxIdentifyInterval`: music Shazam can't place (a DJ mix, a rare pressing) otherwise means a query
+        /// every 12 s for hours.
+        public var missesBeforeBackoff = 4
+        public var maxIdentifyInterval: TimeInterval = 120
         /// Spot-check interval while Playing when the track's length is unknown.
         public var spotCheckInterval: TimeInterval = 75
         /// When the length is known, check this long after the predicted end.
@@ -48,6 +53,8 @@ public struct NowPlayingMachine: Equatable, Sendable {
     public private(set) var nextQueryAt: Date?
     public private(set) var queryInFlight = false
     public private(set) var idleImageShown = false
+    /// No-matches in a row while Identifying (reset by a match or new audio).
+    public private(set) var identifyMisses = 0
     private var silentSince: Date?
 
     public init(timing: Timing = Timing()) {
@@ -61,6 +68,7 @@ public struct NowPlayingMachine: Equatable, Sendable {
         state = .identifying
         candidate = nil
         silentSince = nil
+        identifyMisses = 0
         nextQueryAt = now.addingTimeInterval(timing.sampleDuration)
         return []
     }
@@ -72,6 +80,17 @@ public struct NowPlayingMachine: Equatable, Sendable {
         current = nil
         nextQueryAt = nil
         silentSince = now
+        return []
+    }
+
+    /// A moment of near-silence that wasn't long enough to count as silence: on a record, usually the gap before
+    /// the next track. Ask about the new track once there's a signature's worth of it, and start the back-off
+    /// over (a track's opening is where Shazam is surest).
+    public mutating func gapEnded(at now: Date) -> [Action] {
+        guard state != .idle else { return [] }
+        identifyMisses = 0
+        let due = now.addingTimeInterval(timing.sampleDuration)
+        if !queryInFlight, nextQueryAt.map({ due < $0 }) ?? true { nextQueryAt = due }
         return []
     }
 
@@ -98,6 +117,13 @@ public struct NowPlayingMachine: Equatable, Sendable {
         return actions
     }
 
+    /// The wait after a miss while Identifying: the usual interval for the first few, then doubling.
+    var identifyRetryInterval: TimeInterval {
+        let over = identifyMisses - timing.missesBeforeBackoff
+        guard over >= 0 else { return timing.identifyInterval }
+        return min(timing.identifyInterval * pow(2, Double(over + 1)), timing.maxIdentifyInterval)
+    }
+
     public mutating func handle(_ outcome: MatchOutcome, at now: Date) -> [Action] {
         queryInFlight = false
         // A result that lands after the audio went quiet is stale.
@@ -113,11 +139,13 @@ public struct NowPlayingMachine: Equatable, Sendable {
                 return confirm(m, at: now)
             }
             candidate = m.track
+            identifyMisses = 0
             nextQueryAt = now.addingTimeInterval(timing.identifyInterval)
 
         case (.identifying, _):
             candidate = nil
-            nextQueryAt = now.addingTimeInterval(timing.identifyInterval)
+            identifyMisses += 1
+            nextQueryAt = now.addingTimeInterval(identifyRetryInterval)
 
         case (.playing, .match(let m)):
             if let cur = current, cur.track.isSameSong(as: m.track) {
@@ -160,6 +188,7 @@ public struct NowPlayingMachine: Equatable, Sendable {
     // MARK: Helpers
 
     private mutating func confirm(_ m: MatchObservation, at now: Date) -> [Action] {
+        identifyMisses = 0
         state = .playing
         current = m
         candidate = nil
