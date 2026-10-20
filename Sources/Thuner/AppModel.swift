@@ -302,9 +302,21 @@ final class AppModel {
     }
     var showFloatingCover: Bool { didSet { save(showFloatingCover, "showFloatingCover"); applyFloatingCover() } }
     /// Only show the floating cover while something's playing (hide it once the audio goes quiet).
-    var floatingCoverOnlyWhilePlaying: Bool {
-        didSet { save(floatingCoverOnlyWhilePlaying, "floatingCoverOnlyWhilePlaying"); applyFloatingCover() }
+    /// The floating cover never hides by itself (a paused player's play button has to stay reachable); after a
+    /// while with nothing playing it dims, on the last cover shown, unless this is off.
+    var floatingCoverDims: Bool { didSet { save(floatingCoverDims, "floatingCoverDims") } }
+    /// The floating cover is dimmed now: nothing has played, and no player is paused, for `coverDimAfter`.
+    private(set) var floatingCoverDimmed = false
+    /// The last track shown, kept for the floating cover after the display clears (and across relaunches).
+    private(set) var lastShownTrack: Track? {
+        didSet {
+            if let lastShownTrack, let data = try? JSONEncoder().encode(lastShownTrack) {
+                defaults.set(data, forKey: "floatingCoverTrack")
+            }
+        }
     }
+    @ObservationIgnored private var coverQuietSince: Date?
+    static let coverDimAfter: TimeInterval = 300
 
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -829,7 +841,8 @@ final class AppModel {
         }
         showFloatingCover = d.bool(forKey: "showFloatingCover")
         panelPinned = d.bool(forKey: "panelPinned")
-        floatingCoverOnlyWhilePlaying = d.object(forKey: "floatingCoverOnlyWhilePlaying") as? Bool ?? true
+        floatingCoverDims = d.object(forKey: "floatingCoverDims") as? Bool ?? true
+        lastShownTrack = d.data(forKey: "floatingCoverTrack").flatMap { try? JSONDecoder().decode(Track.self, from: $0) }
         animateMenuBarIcon = d.object(forKey: "animateMenuBarIcon") as? Bool ?? true
         hiddenInputUIDs = Set(d.stringArray(forKey: "hiddenInputUIDs") ?? [])
         skipDuplicateScrobbles = d.object(forKey: "skipDuplicateScrobbles") as? Bool ?? true
@@ -1323,9 +1336,7 @@ final class AppModel {
         }
         updateCapture()
         updater.installPendingUpdateIfQuiet(isQuiet: activePlayer == nil && machine.state == .idle)
-        if showFloatingCover, floatingCoverOnlyWhilePlaying, (floatingCover?.isVisible ?? false) != musicIsPlaying {
-            applyFloatingCover()
-        }
+        updateFloatingCoverDimming(at: now)
         stepIconLevel(at: now)
         let shown = webNowPlaying
         if webDisplayEnabled { webDisplay.update(shown) }
@@ -1962,8 +1973,17 @@ final class AppModel {
             || (peerHasControl && remote?.track != nil)
     }
 
+    private func updateFloatingCoverDimming(at now: Date) {
+        if let track = shownTrack, track != lastShownTrack { lastShownTrack = track }
+        // A paused player counts as something to come back to: its play button stays at full strength.
+        let active = musicIsPlaying || controllablePlayer != nil
+        if active { coverQuietSince = nil } else if coverQuietSince == nil { coverQuietSince = now }
+        let dimmed = floatingCoverDims && coverQuietSince.map { now.timeIntervalSince($0) >= Self.coverDimAfter } == true
+        if dimmed != floatingCoverDimmed { floatingCoverDimmed = dimmed }
+    }
+
     private func applyFloatingCover() {
-        if showFloatingCover, !floatingCoverOnlyWhilePlaying || musicIsPlaying {
+        if showFloatingCover {
             if floatingCover == nil { floatingCover = FloatingCoverController(model: self) }
             floatingCover?.show()
         } else {

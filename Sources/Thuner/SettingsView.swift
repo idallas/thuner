@@ -171,12 +171,12 @@ struct SettingsView: View {
                     }
                     Section {
                         Toggle("Show the floating cover", isOn: $model.showFloatingCover)
-                        Toggle("Only while music is playing", isOn: $model.floatingCoverOnlyWhilePlaying)
+                        Toggle("Dim when nothing's playing", isOn: $model.floatingCoverDims)
                             .disabled(!model.showFloatingCover)
                     } header: {
                         Text("Floating cover")
                     } footer: {
-                        Text("An always-on-top cover window. Drag it anywhere; hover it for playback controls while Apple Music or Spotify plays.")
+                        Text("An always-on-top cover window. Drag it anywhere; hover it for playback controls (Apple Music, Spotify) or × to close it. After 5 minutes with nothing playing it dims, on the last cover.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {

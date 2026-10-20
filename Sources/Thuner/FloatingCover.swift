@@ -89,7 +89,7 @@ struct FloatingCoverView: View {
     @State private var hovering = false
 
     var body: some View {
-        let track = model.shownTrack
+        let track = model.shownTrack ?? model.lastShownTrack
         ZStack(alignment: .bottomLeading) {
             // The cover: dragging it moves the window.
             ZStack {
@@ -136,8 +136,24 @@ struct FloatingCoverView: View {
                     .padding(.top, 12)
                     .transition(.opacity)
             }
+            if hovering {
+                Button { model.showFloatingCover = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .help("Close the floating cover (Settings → Display, or ⋯ → Floating Cover, brings it back)")
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(7)
+                .transition(.opacity)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // Nothing's played for a while: dimmed, back to full while the pointer's over it.
+        .opacity(model.floatingCoverDimmed && !hovering ? 0.4 : 1)
+        .animation(.easeInOut(duration: 0.6), value: model.floatingCoverDimmed)
         .onHover { inside in
             withAnimation(.easeInOut(duration: 0.15)) { hovering = inside }
         }
