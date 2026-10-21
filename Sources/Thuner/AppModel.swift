@@ -140,6 +140,8 @@ final class AppModel {
     @ObservationIgnored private let streamSender = AudioStreamSender()
     @ObservationIgnored private var streamReceiver: AudioStreamReceiver?
     @ObservationIgnored private var lastStreamLog = Date.distantPast
+    /// Since when the Mac to listen to hasn't been found (nil once it is, or while not listening).
+    @ObservationIgnored private var streamLookingSince: Date?
 
     /// The listening session in progress (totals that survive quiet gaps, a minute-by-minute history), and past
     /// sessions, saved to Application Support/Thuner/stream-log.json.
@@ -1107,6 +1109,10 @@ final class AppModel {
     /// Starts (or restarts, with the current settings) listening to `streamSource`, or stops.
     private func applyStreamReceiver() {
         endStreamSession()
+        // Cleared once found (a receiver is made) or listening stops; set again below while still looking.
+        if streamSource.isEmpty || peers.address(ofHost: streamSource) != nil || streamSource == Self.streamThisMac {
+            streamLookingSince = nil
+        }
         streamReceiver?.stop()
         streamReceiver = nil
         updateLevelPolling()
@@ -1120,8 +1126,10 @@ final class AppModel {
         } else if let ip = peers.address(ofHost: streamSource) {
             address = UDP.address(ip, port: StreamWire.port)
         } else {
-            // Not found yet; `otherThuners` changing tries again.
-            streamProblem = "Looking for \(streamSource)…"
+            // Not found yet; `otherThuners` changing tries again. After a while, say it plainly (another network,
+            // the other Mac asleep or off) rather than looking forever.
+            streamProblem = "Looking for \(Self.shown(streamSource))…"
+            if streamLookingSince == nil { streamLookingSince = Date() }
             return
         }
         let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID,
@@ -1311,6 +1319,11 @@ final class AppModel {
 
     private func tick() {
         let now = Date()
+        if streamReceiver == nil, let since = streamLookingSince, now.timeIntervalSince(since) >= 30,
+           !streamSource.isEmpty, streamSource != Self.streamThisMac {
+            let away = "\(Self.shown(streamSource)) isn't on this network"
+            if streamProblem != away { streamProblem = away }
+        }
         // Only write the machine back when the tick changed it: every write redraws whatever shows it.
         var ticked = machine
         let actions = ticked.tick(at: now)
