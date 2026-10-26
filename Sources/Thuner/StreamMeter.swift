@@ -118,6 +118,15 @@ struct StreamMeter: View {
         model.streamProblem == nil && !model.streamQuiet && feed.stats?.playing == true
     }
 
+    /// The row already names the Mac on the left, so its problems drop the name: "echo isn't sharing its input"
+    /// reads "Not sharing", "Looking for echo…" reads "Looking…".
+    static func short(_ problem: String, about name: String) -> String {
+        if problem == "Looking for \(name)…" { return "Looking…" }
+        if problem == "\(name) isn't sharing its input" { return "Not sharing" }
+        if problem == "\(name) isn't on this network" { return "Not on this network" }
+        return problem
+    }
+
     private var sourceName: String {
         model.streamSource == AppModel.streamThisMac ? "Input" : AppModel.shown(model.streamSource)
     }
@@ -130,7 +139,7 @@ struct StreamMeter: View {
     }
 
     private var summary: String {
-        if let problem = model.streamProblem { return problem }
+        if let problem = model.streamProblem { return Self.short(problem, about: AppModel.shown(model.streamSource)) }
         guard streaming else { return "Listening · no audio" }
         let latency = feed.latency.map { String(format: "≈ %.0f ms", $0.totalMs) } ?? String(format: "%.1f ms buffer", feed.bufferMs)
         // Only recent ones (the graph's 30 seconds): a count since the stream began only ever grows, and looks

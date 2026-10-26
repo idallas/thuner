@@ -195,6 +195,7 @@ struct MenuView: View {
                 Image(systemName: model.micOffReason == nil ? "mic" : "mic.slash")
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
+                    .help(micHelp)
                 Picker("Input", selection: $model.inputDeviceUID) {
                     Text("System default").tag(String?.none)
                     ForEach(model.menuDevices) { device in
@@ -204,6 +205,7 @@ struct MenuView: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .disabled(model.micOffReason != nil && model.activePlayer == nil)
+                .focusable(false)
                 // The device fills the row and the channel pair gets a set width (enough for "Turntable (3–4)";
                 // longer names truncate). Left to share the space, whichever picker was favoured took all of it
                 // and squeezed the other down to its arrows.
@@ -217,6 +219,7 @@ struct MenuView: View {
                     .labelsHidden()
                     .controlSize(.small)
                     .frame(width: 130)
+                    .focusable(false)
                 }
                 if model.micEnabled {
                 Button { model.togglePause() } label: {
@@ -230,7 +233,7 @@ struct MenuView: View {
                 }
             }
 
-            if let reason = model.micOffReason {
+            if let reason = model.micOffReason, !reason.isPlayer {
                 micOff(reason)
             } else {
                 LiveLevelMeter(model: model)
@@ -257,23 +260,36 @@ struct MenuView: View {
     }
 
     @ViewBuilder
+    /// The mic icon's tooltip: why it's off, when it is.
+    private var micHelp: String {
+        switch model.micOffReason {
+        case nil: return "Listening with this input"
+        case .disabled: return "Listening with a microphone or input is off in Settings → Listening"
+        case .player(let name): return "Mic is off while \(name) tells ThUNER what's playing"
+        case .paused: return "Listening is paused"
+        case .autoPaused(let minutes): return "Paused after \(minutes) minutes without music; playing something wakes it"
+        case .peer(let host): return "\(AppModel.shown(host)) is playing, so this Mac is standing by"
+        }
+    }
+
     private func micOff(_ reason: AppModel.MicOffReason) -> some View {
         HStack(alignment: .firstTextBaseline) {
             switch reason {
             case .disabled:
-                Text("Microphone listening is off. ThUNER follows Apple Music and Spotify.")
-            case .player(let name):
-                Text("Mic is off while \(name) tells ThUNER what's playing.")
+                Text("Mic listening is off (Settings → Listening).")
+            case .player:
+                EmptyView()
             case .paused:
                 Text("Listening is paused.")
                 Spacer()
                 Button("Resume") { model.togglePause() }.controlSize(.small)
             case .autoPaused(let minutes):
-                Text("Paused after \(minutes) minutes without music. Playing something wakes it.")
+                Text("Paused: no music for \(minutes) minutes.")
+                    .help("Playing something wakes it")
                 Spacer()
                 Button("Resume") { model.togglePause() }.controlSize(.small)
             case .peer(let host):
-                Text("\(AppModel.shown(host)) is playing, so this Mac is standing by.")
+                Text("\(AppModel.shown(host)) is playing; standing by.")
                 Spacer()
                 Button("Listen Here") { model.listenHereAnyway() }
                     .controlSize(.small)
@@ -508,13 +524,15 @@ private struct QuickToggle: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 3) {
+                // When on: a light orange wash and an orange icon, the label in ordinary text (orange on orange
+                // was hard to read), so the row hints rather than outshining the cover.
                 Image(systemName: symbol).font(.system(size: 14, weight: .medium)).frame(height: 18)
+                    .foregroundStyle(isOn ? Wordmark.orange : Color.primary.opacity(isEnabled ? 0.55 : 0.25))
                 Text(title).font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(isEnabled ? (isOn ? 0.85 : 0.6) : 0.3))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
-            // Subtle: a light orange wash and orange text when on, so the row doesn't outshine the cover.
-            .foregroundStyle(isOn ? Wordmark.orange : Color.primary.opacity(isEnabled ? 0.6 : 0.3))
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(isOn ? Wordmark.orange.opacity(0.16) : Color.primary.opacity(0.06)))
             .contentShape(Rectangle())

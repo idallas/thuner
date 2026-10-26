@@ -498,6 +498,8 @@ final class AppModel {
         /// Paused itself after this many minutes of silence; wakes when something plays.
         case autoPaused(Int)
         case peer(String)
+
+        var isPlayer: Bool { if case .player = self { true } else { false } }
     }
 
     var micOffReason: MicOffReason? {
