@@ -41,8 +41,9 @@ final class ControlSurface {
         .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
         .init(id: "nowPlaying", name: "Now Playing", kind: .level, group: "Now Playing", readOnly: true),
         .init(id: "scrobble", name: "Scrobble", kind: .toggle, group: "Now Playing"),
-        // Radio Mode is Scrobble the other way round (on = not scrobbling), kept for what's already set up with it.
-        .init(id: "radio", name: "Radio Mode", kind: .toggle, group: "Now Playing"),
+        // Scrobble the other way round (on = not scrobbling). Was "Radio Mode"; its id stays, so switches already set
+        // up with it (Action Hero, Twist Commando, scripts) keep working.
+        .init(id: "radio", name: "Pause Scrobbling", kind: .toggle, group: "Now Playing"),
         .init(id: "playPause", name: "Play/Pause", kind: .button, group: "Playback"),
         .init(id: "nextTrack", name: "Next Track", kind: .button, group: "Playback"),
         .init(id: "previousTrack", name: "Previous Track", kind: .button, group: "Playback"),

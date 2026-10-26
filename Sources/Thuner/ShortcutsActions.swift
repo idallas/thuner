@@ -90,7 +90,7 @@ struct GetNowPlayingIntent: AppIntent {
 
 struct SetScrobblingIntent: AppIntent {
     static let title: LocalizedStringResource = "Set Scrobbling"
-    static let description = IntentDescription("Turns scrobbling on or off for now, without changing your scrobbling settings (the opposite of Radio Mode).")
+    static let description = IntentDescription("Turns scrobbling on or off for now, without changing your scrobbling settings.")
     static let openAppWhenRun = false
 
     @Parameter(title: "Scrobbling", default: .toggle)
@@ -111,7 +111,9 @@ struct SetScrobblingIntent: AppIntent {
 
 struct SetRadioModeIntent: AppIntent {
     static let title: LocalizedStringResource = "Set Radio Mode"
-    static let description = IntentDescription("Radio mode keeps showing covers but doesn't scrobble.")
+    static let description = IntentDescription("The old name for pausing scrobbling: on means not scrobbling. Use Set Scrobbling instead.")
+    // Hidden from the action list (Set Scrobbling replaces it); shortcuts that already use it keep working.
+    static let isDiscoverable = false
     static let openAppWhenRun = false
 
     @Parameter(title: "Radio mode", default: .toggle)

@@ -66,7 +66,7 @@ final class AppModel {
             guard radioMode != oldValue else { return }
             save(radioMode, "radioMode")
             missedScrobble = nil  // nothing heard in radio mode gets scrobbled after the fact
-            note(radioMode ? "Radio mode on: not scrobbling" : "Radio mode off: scrobbling again")
+            note(radioMode ? "Scrobbling paused" : "Scrobbling again")
         }
     }
     /// The welcome tour has been done (or skipped). Until then, nothing asks for permissions on its own: the

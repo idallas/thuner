@@ -72,7 +72,9 @@ struct MenuView: View {
                 .separator,
                 .init(title: "Floating Cover", isOn: model.showFloatingCover) { model.showFloatingCover.toggle() },
                 .init(title: "Open Web Display", symbol: "safari", isEnabled: model.webDisplayEnabled) { model.openWebDisplay() },
-                .init(title: "Radio Mode (Don't Scrobble)", isOn: model.radioMode) { model.radioMode.toggle() },
+                .init(title: "Scrobble", isOn: model.canScrobble && !model.radioMode, isEnabled: model.canScrobble) {
+                    model.radioMode.toggle()
+                },
                 .separator,
                 .init(title: "History…") { open(.history) },
                 .init(title: "Stream…") { open(.stream) },
@@ -467,7 +469,7 @@ private struct QuickToggles: View {
         HStack(spacing: 6) {
             QuickToggle(title: "Scrobble", symbol: "music.note.list", isOn: model.canScrobble && !model.radioMode,
                         help: model.canScrobble
-                            ? (model.radioMode ? "Not scrobbling: click to scrobble again" : "Scrobbling: click to stop for now (Radio Mode)")
+                            ? (model.radioMode ? "Not scrobbling: click to scrobble again" : "Scrobbling: click to pause it for now")
                             : "Set up scrobbling in Settings → Scrobbling") {
                 model.radioMode.toggle()
             }

@@ -167,7 +167,7 @@ struct OnboardingView: View {
                     .controlSize(.large).buttonStyle(.borderedProminent)
             }
             if let error = model.lastFMError { Text(error).font(.caption).foregroundStyle(.red) }
-            Text("ListenBrainz, Maloja, Koito and other self-hosted services can be added later in Settings → Scrobbling. Radio mode, in the menu, keeps showing covers without scrobbling.")
+            Text("ListenBrainz, Maloja, Koito and other self-hosted services can be added later in Settings → Scrobbling. The Scrobble button in the menu pauses scrobbling whenever you like, and covers keep showing.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }

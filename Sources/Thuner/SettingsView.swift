@@ -240,7 +240,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Other apps")
                     } footer: {
-                        Text("Listening, the silence threshold, levels and meters, now playing, radio mode, the Tuneshine and more, for apps on this Mac that speak Applug, like Twist Commando (any knob or pad) and Action Hero.")
+                        Text("Listening, the silence threshold, levels and meters, now playing, scrobbling, the Tuneshine and more, for apps on this Mac that speak Applug, like Twist Commando (any knob or pad) and Action Hero.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
@@ -257,9 +257,9 @@ struct SettingsView: View {
                 Form {
                     Section {
                         Toggle("Scrobble from this Mac", isOn: $model.scrobblingEnabled)
-                        Toggle("Radio mode", isOn: $model.radioMode)
+                        Toggle("Pause scrobbling for now", isOn: $model.radioMode)
                             .disabled(!model.scrobblingEnabled)
-                            .help("Keep listening and showing covers, but don't scrobble anything. Also in the menu's ⋯.")
+                            .help("Keep listening and showing covers, but don't scrobble anything until you turn it back on. Also the Scrobble button in the menu.")
                         Toggle("Skip plays a service already has", isOn: $model.skipDuplicateScrobbles)
                             .help("Before scrobbling, checks the service's recent plays for the same play from another scrobbler or Mac (where the service allows reading them)")
                     } header: {
