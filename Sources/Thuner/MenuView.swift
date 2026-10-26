@@ -64,8 +64,8 @@ struct MenuView: View {
                 .init(title: "About ThUNER") { open(.about) },
                 .init(title: "Welcome Tour…") { open(.welcome) },
                 .separator,
-                .init(title: isPaused ? "Resume Listening" : "Pause Listening",
-                      symbol: isPaused ? "play.circle" : "pause.circle") { model.togglePause() },
+                .init(title: isPaused ? "Unmute Mic" : "Mute Mic",
+                      symbol: isPaused ? "mic" : "mic.slash") { model.togglePause() },
                 .init(title: "Identify Now", symbol: "waveform",
                       isEnabled: model.machine.state != .idle && model.activePlayer == nil) { model.identifyNow() },
                 .init(title: "Clear Tuneshine", symbol: "xmark.square") { model.clearDisplay() },
@@ -134,7 +134,7 @@ struct MenuView: View {
                         Text("\(AppModel.shown(host)) hears music").font(.system(size: 12)).foregroundStyle(.tertiary)
                     } else {
                         Text("Nothing playing").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                        Text(model.pausedManually ? "Listening is paused" : "Listening for music")
+                        Text(model.pausedManually ? "Mic muted" : "Listening for music")
                             .font(.system(size: 12)).foregroundStyle(.tertiary)
                     }
                 }
@@ -192,10 +192,24 @@ struct MenuView: View {
     private var listening: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: model.micOffReason == nil ? "mic" : "mic.slash")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                    .help(micHelp)
+                // The mic icon is the mute button: crossed out (orange) while muted, plain mic while listening.
+                if model.micEnabled {
+                    Button { model.togglePause() } label: {
+                        Image(systemName: isPaused ? "mic.slash.fill" : (model.micOffReason == nil ? "mic" : "mic.slash"))
+                            .font(.system(size: 13))
+                            .foregroundStyle(isPaused ? Wordmark.orange : .secondary)
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .help(isPaused ? "Unmute: listen again" : "Mute: stop listening until you unmute (\(micHelp.lowercased()))")
+                } else {
+                    Image(systemName: "mic.slash")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                        .help(micHelp)
+                }
                 Picker("Input", selection: $model.inputDeviceUID) {
                     Text("System default").tag(String?.none)
                     ForEach(model.menuDevices) { device in
@@ -220,16 +234,6 @@ struct MenuView: View {
                     .controlSize(.small)
                     .frame(width: 130)
                     .focusable(false)
-                }
-                if model.micEnabled {
-                Button { model.togglePause() } label: {
-                    Image(systemName: isPaused ? "play.circle.fill" : "pause.circle")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isPaused ? Color.accentColor : .secondary)
-                }
-                .buttonStyle(.borderless)
-                .focusable(false)
-                .help(isPaused ? "Resume listening" : "Pause listening")
                 }
             }
 
@@ -266,7 +270,7 @@ struct MenuView: View {
         case nil: return "Listening with this input"
         case .disabled: return "Listening with a microphone or input is off in Settings → Listening"
         case .player(let name): return "Mic is off while \(name) tells ThUNER what's playing"
-        case .paused: return "Listening is paused"
+        case .paused: return "Mic muted"
         case .autoPaused(let minutes): return "Paused after \(minutes) minutes without music; playing something wakes it"
         case .peer(let host): return "\(AppModel.shown(host)) is playing, so this Mac is standing by"
         }
@@ -280,9 +284,9 @@ struct MenuView: View {
             case .player:
                 EmptyView()
             case .paused:
-                Text("Listening is paused.")
+                Text("Mic muted.")
                 Spacer()
-                Button("Resume") { model.togglePause() }.controlSize(.small)
+                Button("Unmute") { model.togglePause() }.controlSize(.small)
             case .autoPaused(let minutes):
                 Text("Paused: no music for \(minutes) minutes.")
                     .help("Playing something wakes it")
@@ -377,7 +381,8 @@ struct MenuView: View {
 
     private var stateLabel: String {
         if model.peerHasControl { return model.remote?.track == nil ? "Identifying" : "Playing" }
-        if model.pausedManually || model.autoPaused { return "Paused" }
+        if model.pausedManually { return "Muted" }
+        if model.autoPaused { return "Paused" }
         if model.activePlayer != nil { return "Playing" }
         return switch model.machine.state {
         case .idle: "Idle"
