@@ -89,7 +89,28 @@ final class AppModel {
     }
     /// The ThUNER to listen to, by host name; `AppModel.streamThisMac` for this Mac's own input (a test); empty
     /// for off.
-    var streamSource: String { didSet { save(streamSource, "streamSource"); applyStreamReceiver() } }
+    var streamSource: String {
+        didSet {
+            save(streamSource, "streamSource")
+            if !streamSource.isEmpty { defaults.set(streamSource, forKey: "lastStreamSource") }
+            applyStreamReceiver()
+        }
+    }
+
+    /// Who the panel's Listen button would listen to: the Mac listened to last, else the first ThUNER found.
+    var listenCandidate: String? {
+        if let last = defaults.string(forKey: "lastStreamSource"), !last.isEmpty, last != Self.streamThisMac { return last }
+        return otherThuners.first
+    }
+
+    /// The panel's Listen button: stop listening, or listen again to the last Mac (or the first one found).
+    func toggleListening() {
+        if !streamSource.isEmpty {
+            streamSource = ""
+        } else if let next = listenCandidate {
+            streamSource = next
+        }
+    }
     var streamMethod: StreamMethod { didSet { save(streamMethod.rawValue, "streamMethod"); applyStreamReceiver() } }
     /// Extra buffer: for raw, the margin beyond one output buffer; for resilient, the least it keeps.
     var streamMarginMs: Double { didSet { save(streamMarginMs, "streamMarginMs"); applyStreamReceiver() } }
@@ -890,6 +911,9 @@ final class AppModel {
         }
         streamSharing = d.bool(forKey: "streamSharing")
         streamSource = d.string(forKey: "streamSource") ?? ""
+        if let source = d.string(forKey: "streamSource"), !source.isEmpty, d.string(forKey: "lastStreamSource") == nil {
+            d.set(source, forKey: "lastStreamSource")
+        }
         streamMethod = StreamMethod(rawValue: d.string(forKey: "streamMethod") ?? "") ?? .resilient
         streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
         streamOutputUID = d.string(forKey: "streamOutputUID")

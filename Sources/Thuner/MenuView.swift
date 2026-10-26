@@ -14,6 +14,7 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             nowPlaying
+            QuickToggles(model: model)
             listening
             alerts
             activity
@@ -46,12 +47,6 @@ struct MenuView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Wordmark().font(.system(size: 14)).allowsHitTesting(false)
-            if model.radioMode {
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .help("Radio mode: listening and showing covers, not scrobbling")
-            }
             Spacer()
             StatusPill(label: stateLabel, detail: stateDetail, color: stateColor).allowsHitTesting(false)
             Button {
@@ -162,10 +157,14 @@ struct MenuView: View {
         HStack(spacing: 4) {
             Image(systemName: HistoryView.symbol(for: entry.source))
             Text(entry.startedAt, format: .dateTime.hour().minute())
-            if model.radioMode, entry.scrobble == .notSent {
+            if model.canScrobble, model.radioMode, entry.scrobble == .notSent {
                 Text("·")
-                Label("Radio", systemImage: "antenna.radiowaves.left.and.right")
-                    .help("Radio mode: not scrobbling")
+                Text("Not scrobbling")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Wordmark.orange)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Wordmark.orange.opacity(0.16)))
+                    .help("Scrobbling is off for now (the Scrobble button below turns it back on)")
             }
             switch entry.scrobble {
             case .scrobbled:
@@ -446,7 +445,8 @@ struct LevelMeter: View {
 /// "ThUNER": the name comes from the nickname (Bethune) and puns on "tuner", so T·UNER is the bold
 /// orange part and the "h" sits quietly in between.
 struct Wordmark: View {
-    private let orange = Color(red: 1.0, green: 0.50, blue: 0.13)
+    static let orange = Color(red: 1.0, green: 0.50, blue: 0.13)
+    private var orange: Color { Self.orange }
 
     var body: some View {
         (Text("T").fontWeight(.heavy).foregroundStyle(orange)
@@ -457,3 +457,68 @@ struct Wordmark: View {
     }
 }
 
+
+/// The switches people reach for most, one click each: scrobbling, the floating cover, listening to another
+/// Mac's stream here, sharing this Mac's input. Lit (ThUNER's orange) when on.
+private struct QuickToggles: View {
+    let model: AppModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            QuickToggle(title: "Scrobble", symbol: "music.note.list", isOn: model.canScrobble && !model.radioMode,
+                        help: model.canScrobble
+                            ? (model.radioMode ? "Not scrobbling: click to scrobble again" : "Scrobbling: click to stop for now (Radio Mode)")
+                            : "Set up scrobbling in Settings → Scrobbling") {
+                model.radioMode.toggle()
+            }
+            .disabled(!model.canScrobble)
+            QuickToggle(title: "Cover", symbol: "rectangle.on.rectangle", isOn: model.showFloatingCover,
+                        help: model.showFloatingCover ? "Hide the floating cover" : "Show the floating cover") {
+                model.showFloatingCover.toggle()
+            }
+            QuickToggle(title: "Listen", symbol: "headphones", isOn: !model.streamSource.isEmpty,
+                        help: listenHelp) {
+                model.toggleListening()
+            }
+            .disabled(model.streamSource.isEmpty && model.listenCandidate == nil)
+            QuickToggle(title: "Share", symbol: "dot.radiowaves.left.and.right", isOn: model.streamSharing,
+                        help: model.streamSharing ? "Stop sharing this Mac's input" : "Share this Mac's input with other ThUNERs") {
+                model.streamSharing.toggle()
+            }
+        }
+    }
+
+    private var listenHelp: String {
+        if !model.streamSource.isEmpty { return "Stop listening to \(AppModel.shown(model.streamSource))'s stream" }
+        if let next = model.listenCandidate { return "Listen to \(AppModel.shown(next))'s stream here" }
+        return "No other ThUNER on this network to listen to"
+    }
+}
+
+private struct QuickToggle: View {
+    let title: String
+    let symbol: String
+    let isOn: Bool
+    let help: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 14, weight: .medium)).frame(height: 18)
+                Text(title).font(.system(size: 10, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .foregroundStyle(isOn ? Color.white : Color.primary.opacity(isEnabled ? 0.8 : 0.35))
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(isOn ? Wordmark.orange : Color.primary.opacity(0.07)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
