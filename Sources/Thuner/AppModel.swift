@@ -56,6 +56,10 @@ final class AppModel {
             if scrobblingEnabled { catchUpScrobbling() }
         }
     }
+    /// Scrobbling is on in Settings and a service is connected, so the Scrobble switch (Radio Mode's opposite) can
+    /// do something.
+    var canScrobble: Bool { scrobblingEnabled && hasScrobbleService }
+
     /// Radio mode: keep listening and showing covers, but don't send anything to scrobbling services.
     var radioMode: Bool {
         didSet {

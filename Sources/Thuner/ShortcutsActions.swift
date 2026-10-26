@@ -88,6 +88,27 @@ struct GetNowPlayingIntent: AppIntent {
     }
 }
 
+struct SetScrobblingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Set Scrobbling"
+    static let description = IntentDescription("Turns scrobbling on or off for now, without changing your scrobbling settings (the opposite of Radio Mode).")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Scrobbling", default: .toggle)
+    var state: ThunerSwitch
+
+    static var parameterSummary: some ParameterSummary { Summary("Turn ThUNER's scrobbling \(\.$state)") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let model = try await thuner()
+        guard model.canScrobble else {
+            throw ThunerIntentError(message: "Scrobbling isn't set up on this Mac (Settings → Scrobbling)")
+        }
+        model.radioMode = !state.resolve(current: !model.radioMode)
+        return .result(value: model.radioMode ? "Not scrobbling" : "Scrobbling")
+    }
+}
+
 struct SetRadioModeIntent: AppIntent {
     static let title: LocalizedStringResource = "Set Radio Mode"
     static let description = IntentDescription("Radio mode keeps showing covers but doesn't scrobble.")

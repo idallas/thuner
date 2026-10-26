@@ -40,6 +40,8 @@ final class ControlSurface {
         .init(id: "streamSourceLevel", name: "Stream Source Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
         .init(id: "streamLevel", name: "Stream Level", kind: .level, group: "Streaming", readOnly: true, meterChannels: 2),
         .init(id: "nowPlaying", name: "Now Playing", kind: .level, group: "Now Playing", readOnly: true),
+        .init(id: "scrobble", name: "Scrobble", kind: .toggle, group: "Now Playing"),
+        // Radio Mode is Scrobble the other way round (on = not scrobbling), kept for what's already set up with it.
         .init(id: "radio", name: "Radio Mode", kind: .toggle, group: "Now Playing"),
         .init(id: "playPause", name: "Play/Pause", kind: .button, group: "Playback"),
         .init(id: "nextTrack", name: "Next Track", kind: .button, group: "Playback"),
@@ -95,6 +97,10 @@ final class ControlSurface {
         case "identify": model.identifyNow()
         case "listenHere": if model.peerHasControl { model.listenHereAnyway() }
         case "radio": model.radioMode.toggle()
+        case "scrobble":
+            // Nothing to switch on without scrobbling set up (Settings → Scrobbling).
+            guard model.canScrobble else { return .notAllowed }
+            model.radioMode.toggle()
         case "clear": model.clearDisplay()
         case "playPause": model.playback(.playPause)
         case "nextTrack": model.playback(.next)
@@ -123,6 +129,8 @@ final class ControlSurface {
         update("threshold", State(value: (model.thresholdDB - r.lowerBound) / (r.upperBound - r.lowerBound),
                                   text: "\(Int(model.thresholdDB)) dB"))
         update("radio", State(on: model.radioMode))
+        update("scrobble", State(text: model.canScrobble ? (model.radioMode ? "Off" : "On") : "Not set up",
+                                 on: model.canScrobble && !model.radioMode))
         update("floatingCover", State(on: model.showFloatingCover))
         if let b = model.tuneshineBrightness { update("brightness", State(value: Double(b) / 100, text: "\(b)%")) }
         if let track = model.shownTrack {
