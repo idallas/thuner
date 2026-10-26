@@ -459,7 +459,7 @@ struct Wordmark: View {
 
 
 /// The switches people reach for most, one click each: scrobbling, the floating cover, listening to another
-/// Mac's stream here, sharing this Mac's input. Lit (ThUNER's orange) when on.
+/// Mac's stream here, sharing this Mac's input. Tinted ThUNER's orange when on.
 private struct QuickToggles: View {
     let model: AppModel
 
@@ -511,9 +511,10 @@ private struct QuickToggle: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
-            .foregroundStyle(isOn ? Color.white : Color.primary.opacity(isEnabled ? 0.8 : 0.35))
+            // Subtle: a light orange wash and orange text when on, so the row doesn't outshine the cover.
+            .foregroundStyle(isOn ? Wordmark.orange : Color.primary.opacity(isEnabled ? 0.6 : 0.3))
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(isOn ? Wordmark.orange : Color.primary.opacity(0.07)))
+                .fill(isOn ? Wordmark.orange.opacity(0.16) : Color.primary.opacity(0.06)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
