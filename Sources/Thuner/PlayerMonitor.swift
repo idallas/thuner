@@ -25,6 +25,8 @@ final class PlayerMonitor {
 
     /// Called with each change, after artwork has been looked up.
     var onChange: ((Snapshot) -> Void)?
+    /// A cover from the player itself, when the catalogue lookups find none (set by AppModel).
+    var playerArtwork: ((Source) async -> URL?)?
 
     private(set) var latest: [Source: Snapshot] = [:]
     private let artwork = ArtworkLookup()
@@ -87,6 +89,7 @@ final class PlayerMonitor {
             let found = await artwork.find(for: track)
             var t = track
             t.artworkURL = found.url
+            if t.artworkURL == nil, let playerArtwork { t.artworkURL = await playerArtwork(source) }
             t.appleMusicID = found.appleMusicID
             if t.duration == nil { t.duration = found.duration }
             emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt))

@@ -54,6 +54,21 @@ enum PlayerControl {
     private static let queue = DispatchQueue(label: "com.idallas.thuner.player-control", qos: .userInitiated)
     private static let log = Logger(subsystem: "com.idallas.thuner", category: "players")
 
+    /// The current track's cover, straight from the Music app, for tracks Apple's catalogue search can't find.
+    /// Only when ThUNER may already control Music (granted through the playback buttons): this never asks.
+    static func currentArtwork(_ source: PlayerMonitor.Source) async -> Data? {
+        guard source == .appleMusic, isRunning(source), isAllowed(source) == true else { return nil }
+        let script = "tell application id \"\(bundleID(source))\" to get raw data of artwork 1 of current track"
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                var error: NSDictionary?
+                let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
+                let data = error == nil ? result?.data : nil
+                continuation.resume(returning: (data?.isEmpty ?? true) ? nil : data)
+            }
+        }
+    }
+
     static func send(_ command: Command, to source: PlayerMonitor.Source) async -> Outcome {
         guard isRunning(source) else { return .notRunning }
         let script = "tell application id \"\(bundleID(source))\" to \(command.script)"

@@ -165,7 +165,9 @@ struct FloatingCoverView: View {
     /// App Transport Security blocks plain-http image loads, and the Tuneshine-friendly URLs are http.
     /// Every artwork CDN we use also serves https.
     static func secure(_ url: URL) -> URL {
-        guard url.scheme == "http", var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        // Only the CDNs: ThUNER's own covers (LocalArtwork) are http on this Mac's address.
+        guard url.scheme == "http", let host = url.host, host.hasSuffix("mzstatic.com") || host.hasSuffix("scdn.co"),
+              var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         c.scheme = "https"
         return c.url ?? url
     }

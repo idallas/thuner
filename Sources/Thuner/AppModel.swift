@@ -275,6 +275,17 @@ final class AppModel {
         return URL(string: "http://\(name):\(WebDisplayServer.defaultPort)/")!
     }
 
+    /// Where a cover saved by LocalArtwork can be loaded from: ThUNER's web server at this Mac's IP address (so the
+    /// Tuneshine and other Macs can fetch it), localhost when the server is for this Mac only, or the file itself
+    /// when the server is off (then only this Mac shows it).
+    func localArtworkURL(_ name: String) -> URL {
+        if webDisplayEnabled {
+            let host = webDisplayLocalOnly ? "localhost" : (LocalArtwork.localIPv4() ?? "localhost")
+            if let url = URL(string: "http://\(host):\(WebDisplayServer.defaultPort)/artwork/\(name)") { return url }
+        }
+        return LocalArtwork.folder.appendingPathComponent(name)
+    }
+
     func openWebDisplay(mode: String = "tuneshine") {
         if let url = URL(string: "http://localhost:\(WebDisplayServer.defaultPort)/?mode=\(mode)") {
             NSWorkspace.shared.open(url)
@@ -949,6 +960,12 @@ final class AppModel {
         outputDevices = AudioDevices.outputDevices()
 
         players.onChange = { [weak self] _ in self?.playerChanged() }
+        players.playerArtwork = { [weak self] source in
+            guard let data = await PlayerControl.currentArtwork(source),
+                  let name = await Task.detached(operation: { LocalArtwork.save(data) }).value else { return nil }
+            self?.logger.notice("Cover from \(source.rawValue, privacy: .public) itself (not in Apple's catalogue search)")
+            return self?.localArtworkURL(name)
+        }
         players.start()
 
         tuneshineBrowser.onChange = { [weak self] in

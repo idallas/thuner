@@ -222,6 +222,13 @@ struct TuneshineDisplay: CoverDisplay {
     /// image CDN serves any size by rewriting the "{w}x{h}bb" path component. The Shortcut also downgraded
     /// to http, which saves the device a TLS handshake.
     static func deviceFriendlyArtworkURL(_ url: URL) -> URL {
+        // ThUNER's own covers (from the Music app): ask its server for a 64×64 copy; a full-size JPEG is taken
+        // without an error but never shown.
+        if url.path.hasPrefix("/artwork/"), url.port == Int(WebDisplayServer.defaultPort),
+           var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            c.queryItems = [URLQueryItem(name: "size", value: "64")]
+            return c.url ?? url
+        }
         var s = url.absoluteString
         if let r = s.range(of: #"/\d+x\d+bb\."#, options: .regularExpression) {
             s.replaceSubrange(r, with: "/300x300bb.")

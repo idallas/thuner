@@ -249,6 +249,16 @@ final class WebDisplayServer: @unchecked Sendable {
             sendJSON(connection, ["controls": controlsJSON()])
         case ("GET", "/api/events"):
             openEventStream(connection, levels: request.query["levels"] == "1")
+        case ("GET", let path) where path.hasPrefix("/artwork/"):
+            // Covers taken from the Music app (LocalArtwork); only names ThUNER made, nothing else on disk.
+            let name = String(path.dropFirst("/artwork/".count))
+            if let file = request.query["size"].flatMap(Int.init).map({ LocalArtwork.file(named: name, size: $0) })
+                ?? LocalArtwork.file(named: name),
+               let data = try? Data(contentsOf: file) {
+                send(connection, status: "200 OK", type: "image/jpeg", body: data)
+            } else {
+                sendJSON(connection, ["error": "not found"], status: "404 Not Found")
+            }
         case ("POST", let path) where path.hasPrefix("/api/controls/"):
             act(on: String(path.dropFirst("/api/controls/".count)), request: request, connection: connection)
         default:
