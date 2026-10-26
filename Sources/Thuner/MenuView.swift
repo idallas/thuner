@@ -163,7 +163,7 @@ struct MenuView: View {
                 Text("·")
                 Text("Not scrobbling")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Wordmark.orange)
+                    .foregroundStyle(Wordmark.deepOrange)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Capsule().fill(Wordmark.orange.opacity(0.16)))
                     .help("Scrobbling is off for now (the Scrobble button below turns it back on)")
@@ -195,9 +195,11 @@ struct MenuView: View {
                 // The mic icon is the mute button: crossed out (orange) while muted, plain mic while listening.
                 if model.micEnabled {
                     Button { model.togglePause() } label: {
-                        Image(systemName: isPaused ? "mic.slash.fill" : (model.micOffReason == nil ? "mic" : "mic.slash"))
+                        // Crossed out only when you muted it; off for another reason (a player or the turntable
+                        // Mac in charge), a dimmed mic: it can still be muted.
+                        Image(systemName: isPaused ? "mic.slash.fill" : "mic")
                             .font(.system(size: 13))
-                            .foregroundStyle(isPaused ? Wordmark.orange : .secondary)
+                            .foregroundStyle(isPaused ? Wordmark.deepOrange : Color.secondary.opacity(model.micOffReason == nil ? 1 : 0.45))
                             .frame(width: 18, height: 18)
                             .contentShape(Rectangle())
                     }
@@ -469,6 +471,13 @@ struct LevelMeter: View {
 /// orange part and the "h" sits quietly in between.
 struct Wordmark: View {
     static let orange = Color(red: 1.0, green: 0.50, blue: 0.13)
+    /// A deeper orange for icons and small text on a light orange wash (the wordmark's orange there was too faint
+    /// to read); lighter in dark mode, for the same contrast on a dark panel.
+    static let deepOrange = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 1.0, green: 0.62, blue: 0.32, alpha: 1)
+            : NSColor(red: 0.74, green: 0.30, blue: 0.02, alpha: 1)
+    })
     private var orange: Color { Self.orange }
 
     var body: some View {
@@ -532,7 +541,7 @@ private struct QuickToggle: View {
                 // When on: a light orange wash and an orange icon, the label in ordinary text (orange on orange
                 // was hard to read), so the row hints rather than outshining the cover.
                 Image(systemName: symbol).font(.system(size: 14, weight: .medium)).frame(height: 18)
-                    .foregroundStyle(isOn ? Wordmark.orange : Color.primary.opacity(isEnabled ? 0.55 : 0.25))
+                    .foregroundStyle(isOn ? Wordmark.deepOrange : Color.primary.opacity(isEnabled ? 0.55 : 0.25))
                 Text(title).font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.primary.opacity(isEnabled ? (isOn ? 0.85 : 0.6) : 0.3))
             }
