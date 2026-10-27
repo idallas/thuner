@@ -218,14 +218,15 @@ struct MenuView: View {
                         Text(device.uid == SystemAudioTap.uid ? model.systemAudioLabel : model.deviceLabel(device)).tag(Optional(device.uid))
                     }
                 }
+                // Borderless: the name in plain text with a small chevron, like the rest of the panel, rather than
+                // a boxed pop-up button. Each takes its own width, the device first.
                 .labelsHidden()
+                .pickerStyle(.menu)
+                .buttonStyle(.borderless)
                 .controlSize(.small)
                 .disabled(model.micOffReason != nil && model.activePlayer == nil)
                 .focusable(false)
-                // The device fills the row and the channel pair gets a set width (enough for "Turntable (3–4)";
-                // longer names truncate). Left to share the space, whichever picker was favoured took all of it
-                // and squeezed the other down to its arrows.
-                .frame(maxWidth: .infinity)
+                .fixedSize()
                 if let device = model.selectedDevice, device.inputChannels > 2 {
                     Picker("Channels", selection: $model.firstChannel) {
                         ForEach(device.channelPairs, id: \.first) { pair in
@@ -233,10 +234,13 @@ struct MenuView: View {
                         }
                     }
                     .labelsHidden()
+                    .pickerStyle(.menu)
+                    .buttonStyle(.borderless)
                     .controlSize(.small)
-                    .frame(width: 130)
                     .focusable(false)
+                    .fixedSize()
                 }
+                Spacer(minLength: 0)
             }
 
             if let reason = model.micOffReason, !reason.isPlayer {
