@@ -52,11 +52,10 @@ struct SettingsView: View {
                     Section {
                         Toggle("Apple Music", isOn: $model.useAppleMusic)
                         Toggle("Spotify", isOn: $model.useSpotify)
-                        Toggle("Ask before turning the mic on when one stops", isOn: $model.askBeforeMicAfterPlayer)
                     } header: {
                         Text("Follow players on this Mac")
                     } footer: {
-                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause. When the player stops, the mic waits for Listen in the menu unless asking is off.")
+                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
@@ -85,12 +84,14 @@ struct SettingsView: View {
                 Form {
                     Section {
                         Toggle("Listen with a microphone or input", isOn: $model.micEnabled)
+                        Toggle("Ask before listening when Apple Music or Spotify stops", isOn: $model.askBeforeMicAfterPlayer)
+                            .disabled(!model.micEnabled)
                         LabeledContent("Inputs") {
                             Button("Show and Name Inputs…") { managingInputs = true }
                         }
                         .disabled(!model.micEnabled)
                     } footer: {
-                        Text("Off: ThUNER never uses the microphone or Shazam, and only follows Apple Music, Spotify and a turntable Mac. Choose the input in the menu.")
+                        Text("Off: ThUNER never uses the microphone or Shazam, and only follows Apple Music, Spotify and a turntable Mac. Choose the input in the menu. Asking keeps the mic off when a player stops, until you click Listen in the menu.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
