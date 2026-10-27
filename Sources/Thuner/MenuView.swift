@@ -18,6 +18,7 @@ struct MenuView: View {
             listening
             alerts
             activity
+            Divider().padding(.bottom, -6)
             footer
         }
         .padding(16)
@@ -249,7 +250,7 @@ struct MenuView: View {
                 LiveLevelMeter(model: model)
                 HStack(spacing: 8) {
                     Text("Silence").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
-                    Slider(value: $model.thresholdDB, in: -80...(-10), step: 1).controlSize(.mini)
+                    Slider(value: $model.thresholdDB, in: -80...(-10), step: 1).controlSize(.mini).focusable(false)
                     Text("\(Int(model.thresholdDB)) dB").font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
                 }
@@ -371,16 +372,14 @@ struct MenuView: View {
 
     private var footer: some View {
         // Plain grey text and icons, like the rest of the panel, rather than boxed buttons.
-        HStack(spacing: 14) {
-            Button { open(.history) } label: { Label("History", systemImage: "clock.arrow.circlepath") }
-            Button { open(.settings) } label: { Label("Settings", systemImage: "gearshape") }
+        // Under a separator; each lights up on hover so it reads as a button.
+        HStack(spacing: 2) {
+            FooterButton(title: "History", symbol: "clock.arrow.circlepath") { open(.history) }
+            FooterButton(title: "Settings", symbol: "gearshape") { open(.settings) }
             Spacer()
-            Button { NSApplication.shared.terminate(nil) } label: { Label("Quit", systemImage: "power") }
+            FooterButton(title: "Quit", symbol: "power") { NSApplication.shared.terminate(nil) }
         }
-        .buttonStyle(.borderless)
-        .font(.system(size: 12))
-        .foregroundStyle(.secondary)
-        .focusable(false)
+        .padding(.horizontal, -6)
     }
 
     private func open(_ kind: AppWindows.Kind) {
@@ -563,5 +562,28 @@ private struct QuickToggle: View {
         .focusable(false)
         .help(help)
         .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+/// A footer button: grey text and icon, with a soft highlight under the pointer.
+private struct FooterButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 12))
+                .foregroundStyle(hovering ? Color.primary : Color.secondary)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { hovering = $0 }
     }
 }
