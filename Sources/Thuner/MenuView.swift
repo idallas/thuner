@@ -370,13 +370,17 @@ struct MenuView: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack {
+        // Plain grey text and icons, like the rest of the panel, rather than boxed buttons.
+        HStack(spacing: 14) {
             Button { open(.history) } label: { Label("History", systemImage: "clock.arrow.circlepath") }
             Button { open(.settings) } label: { Label("Settings", systemImage: "gearshape") }
             Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
+            Button { NSApplication.shared.terminate(nil) } label: { Label("Quit", systemImage: "power") }
         }
-        .controlSize(.small)
+        .buttonStyle(.borderless)
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .focusable(false)
     }
 
     private func open(_ kind: AppWindows.Kind) {
