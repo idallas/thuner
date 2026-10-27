@@ -1014,9 +1014,26 @@ final class AppModel {
         applyFloatingCover()
         Task { await refreshLastFMStatus() }
         if onboardingComplete {
-            startListening()
             startNetwork()
+            startListeningAfterPlayerCheck()
         }
+    }
+
+    /// Asks the players what's already playing before the mic starts, so a track playing at launch is followed
+    /// straight away instead of the mic listening (and Shazam guessing) until its next change. Never waits more
+    /// than 3 seconds.
+    private func startListeningAfterPlayerCheck() {
+        var started = false
+        let start = { [weak self] in
+            guard !started else { return }
+            started = true
+            self?.startListening()
+        }
+        Task { [weak self] in
+            await self?.players.checkWhatsPlaying()
+            start()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { start() }
     }
 
     /// Asks for the microphone if needed and starts listening. The tour calls this from its Listening step.

@@ -541,6 +541,7 @@ private struct QuickToggle: View {
     let help: String
     let action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -555,12 +556,15 @@ private struct QuickToggle: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(isOn ? Wordmark.orange.opacity(0.16) : Color.primary.opacity(0.06)))
+                // A step deeper under the pointer, so it reads as clickable.
+                .fill(isOn ? Wordmark.orange.opacity(hovering && isEnabled ? 0.26 : 0.16)
+                           : Color.primary.opacity(hovering && isEnabled ? 0.12 : 0.06)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .focusable(false)
         .help(help)
+        .onHover { hovering = $0 }
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }

@@ -69,6 +69,49 @@ enum PlayerControl {
         }
     }
 
+    /// What the app is playing right now, in the same shape as its now-playing notification, or nil when it isn't
+    /// playing, isn't open, or ThUNER may not control it yet (this never asks, and never launches the app).
+    static func nowPlaying(_ source: PlayerMonitor.Source) async -> [AnyHashable: Any]? {
+        guard isRunning(source), isAllowed(source) == true else { return nil }
+        let script = switch source {
+        case .appleMusic: """
+            tell application id "com.apple.Music"
+                if player state is not playing then return ""
+                set t to current track
+                return {name of t, artist of t, album of t, duration of t}
+            end tell
+            """
+        case .spotify: """
+            tell application id "com.spotify.client"
+                if player state is not playing then return ""
+                set t to current track
+                return {name of t, artist of t, album of t, duration of t, id of t, player position}
+            end tell
+            """
+        }
+        let result: NSAppleEventDescriptor? = await withCheckedContinuation { continuation in
+            queue.async {
+                var error: NSDictionary?
+                let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
+                continuation.resume(returning: error == nil ? result : nil)
+            }
+        }
+        guard let list = result, list.numberOfItems >= 4,
+              let name = list.atIndex(1)?.stringValue, let artist = list.atIndex(2)?.stringValue else { return nil }
+        var info: [AnyHashable: Any] = ["Player State": "Playing", "Name": name, "Artist": artist]
+        if let album = list.atIndex(3)?.stringValue { info["Album"] = album }
+        let duration = list.atIndex(4)?.doubleValue ?? 0
+        switch source {
+        case .appleMusic:
+            if duration > 0 { info["Total Time"] = duration * 1000 }  // seconds → ms, as the notification has it
+        case .spotify:
+            if duration > 0 { info["Duration"] = duration }  // already ms
+            if let id = list.atIndex(5)?.stringValue { info["Track ID"] = id }
+            if let position = list.atIndex(6)?.doubleValue { info["Playback Position"] = position }
+        }
+        return info
+    }
+
     static func send(_ command: Command, to source: PlayerMonitor.Source) async -> Outcome {
         guard isRunning(source) else { return .notRunning }
         let script = "tell application id \"\(bundleID(source))\" to \(command.script)"

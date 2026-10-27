@@ -45,35 +45,49 @@ final class PlayerMonitor {
         })
     }
 
-    private func receivedMusic(_ info: [AnyHashable: Any]) {
+    /// What's already playing at launch: the apps only announce changes, so a track playing before ThUNER started
+    /// would otherwise go unseen until the next one (and the mic would listen meanwhile). Asks Apple Music and
+    /// Spotify directly, only those already open that ThUNER may already control (never launches or asks), and
+    /// returns once a playing track (with its cover) has been passed on.
+    func checkWhatsPlaying() async {
+        for source in [Source.appleMusic, .spotify] {
+            guard let info = await PlayerControl.nowPlaying(source) else { continue }
+            let lookup = source == .appleMusic ? receivedMusic(info) : receivedSpotify(info)
+            await lookup?.value
+        }
+    }
+
+    @discardableResult
+    private func receivedMusic(_ info: [AnyHashable: Any]) -> Task<Void, Never>? {
         let playing = info["Player State"] as? String == "Playing"
         guard let name = info["Name"] as? String, let artist = info["Artist"] as? String else {
             // "Stopped" arrives without track details.
-            update(.appleMusic, track: latest[.appleMusic]?.track, playing: false, position: nil)
-            return
+            return update(.appleMusic, track: latest[.appleMusic]?.track, playing: false, position: nil)
         }
         var track = Track(title: name, artist: artist, album: info["Album"] as? String)
         if let ms = info["Total Time"] as? Double ?? (info["Total Time"] as? Int).map(Double.init) { track.duration = ms / 1000 }
-        update(.appleMusic, track: track, playing: playing, position: nil)
+        return update(.appleMusic, track: track, playing: playing, position: nil)
     }
 
-    private func receivedSpotify(_ info: [AnyHashable: Any]) {
+    @discardableResult
+    private func receivedSpotify(_ info: [AnyHashable: Any]) -> Task<Void, Never>? {
         let playing = info["Player State"] as? String == "Playing"
         let id = info["Track ID"] as? String ?? ""
         // Ads and podcasts' interstitials aren't music.
-        if id.hasPrefix("spotify:ad:") { return }
+        if id.hasPrefix("spotify:ad:") { return nil }
         guard let name = info["Name"] as? String, let artist = info["Artist"] as? String else {
-            update(.spotify, track: latest[.spotify]?.track, playing: false, position: nil)
-            return
+            return update(.spotify, track: latest[.spotify]?.track, playing: false, position: nil)
         }
         var track = Track(title: name, artist: artist, album: info["Album"] as? String)
         if let ms = info["Duration"] as? Double ?? (info["Duration"] as? Int).map(Double.init) { track.duration = ms / 1000 }
         if id.hasPrefix("spotify:track:") { track.spotifyID = String(id.dropFirst("spotify:track:".count)) }
-        update(.spotify, track: track, playing: playing, position: info["Playback Position"] as? Double)
+        return update(.spotify, track: track, playing: playing, position: info["Playback Position"] as? Double)
     }
 
-    private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?) {
-        guard let track else { return }
+    /// Passes the change on, after looking up artwork for a new track; the returned task finishes once it has.
+    @discardableResult
+    private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?) -> Task<Void, Never>? {
+        guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
         // Same track as before (play/pause): keep the artwork we already found.
@@ -82,10 +96,10 @@ final class PlayerMonitor {
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
             emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt))
-            return
+            return nil
         }
         log.notice("\(source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
-        Task {
+        return Task {
             let found = await artwork.find(for: track)
             var t = track
             t.artworkURL = found.url
