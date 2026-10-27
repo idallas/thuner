@@ -320,6 +320,15 @@ final class AppModel {
     /// Use the Music / Spotify apps' own now-playing info instead of Shazam while they're playing.
     var useAppleMusic: Bool { didSet { save(useAppleMusic, "useAppleMusic"); playerChanged() } }
     var useSpotify: Bool { didSet { save(useSpotify, "useSpotify"); playerChanged() } }
+    /// When a player stops, keep the mic off until asked (Listen in the panel) instead of turning it on.
+    var askBeforeMicAfterPlayer: Bool {
+        didSet {
+            save(askBeforeMicAfterPlayer, "askBeforeMicAfterPlayer")
+            if !askBeforeMicAfterPlayer, heldAfterPlayer != nil { listenAfterPlayer() }
+        }
+    }
+    /// The player that just stopped, while the mic waits to be asked back on. Not saved.
+    private(set) var heldAfterPlayer: String?
     /// Check Last.fm for the same play (Silicio, Spotify's own scrobbling, another Mac) before scrobbling.
     var skipDuplicateScrobbles: Bool { didSet { save(skipDuplicateScrobbles, "skipDuplicateScrobbles") } }
     /// Input devices left out of the menu's picker (by UID).
@@ -498,6 +507,8 @@ final class AppModel {
         /// Paused itself after this many minutes of silence; wakes when something plays.
         case autoPaused(Int)
         case peer(String)
+        /// A player stopped; the mic waits to be asked back on.
+        case afterPlayer(String)
 
         var isPlayer: Bool { if case .player = self { true } else { false } }
     }
@@ -508,6 +519,7 @@ final class AppModel {
         if autoPaused { return .autoPaused(Int(autoPauseMinutes)) }
         if peerHasControl, let remote { return .peer(remote.host) }
         if let player = activePlayer { return .player(player.source.rawValue) }
+        if let held = heldAfterPlayer { return .afterPlayer(held) }
         return nil
     }
 
@@ -521,9 +533,20 @@ final class AppModel {
     func togglePause() {
         if autoPaused {
             wake("Resumed")
+        } else if heldAfterPlayer != nil, !pausedManually {
+            listenAfterPlayer()
         } else {
+            if pausedManually { heldAfterPlayer = nil }
             pausedManually.toggle()
         }
+    }
+
+    /// Turns the mic back on after a player stopped.
+    func listenAfterPlayer() {
+        guard heldAfterPlayer != nil else { return }
+        heldAfterPlayer = nil
+        note("Mic back on for Shazam")
+        updateCapture()
     }
 
     // MARK: Auto-pause
@@ -930,6 +953,7 @@ final class AppModel {
         streamPassword = Keychain.read(String.self, account: "stream-password") ?? ""
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
+        askBeforeMicAfterPlayer = d.object(forKey: "askBeforeMicAfterPlayer") as? Bool ?? true
         gate = LevelGate(thresholdDB: threshold)
         arbiter = PushArbiter(role: role)
         applyTiming()
@@ -1659,18 +1683,25 @@ final class AppModel {
             $0.isPlaying && ($0.source == .appleMusic ? useAppleMusic : useSpotify)
         }
         let playing = enabled.max { $0.receivedAt < $1.receivedAt }
-        let wasActive = activePlayer != nil
+        let previous = activePlayer
+        let wasActive = previous != nil
         activePlayer = playing
 
         guard let playing else {
             if wasActive {
                 clearAfterQuietSince = Date()
-                note("Player stopped; mic back on for Shazam")
+                if askBeforeMicAfterPlayer, micEnabled, let stopped = previous {
+                    heldAfterPlayer = stopped.source.rawValue
+                    note("\(stopped.source.rawValue) stopped; mic stays off until you ask")
+                } else {
+                    note("Player stopped; mic back on for Shazam")
+                }
             }
             updateCapture()
             return
         }
         clearAfterQuietSince = nil
+        heldAfterPlayer = nil
         if autoPaused { wake("\(playing.source.rawValue) started playing") }
         if !wasActive { note("Using \(playing.source.rawValue) instead of Shazam; mic off") }
         updateCapture()

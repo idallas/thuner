@@ -206,7 +206,9 @@ struct MenuView: View {
                     }
                     .buttonStyle(.plain)
                     .focusable(false)
-                    .help(isPaused ? "Unmute: listen again" : "Mute: stop listening until you unmute (\(micHelp.lowercased()))")
+                    .help(isPaused ? "Unmute: listen again"
+                          : model.heldAfterPlayer != nil ? "Listen: turn the mic on"
+                          : "Mute: stop listening until you unmute (\(micHelp.lowercased()))")
                 } else {
                     Image(systemName: "mic.slash")
                         .foregroundStyle(.secondary)
@@ -225,7 +227,7 @@ struct MenuView: View {
                 .pickerStyle(.menu)
                 .buttonStyle(.borderless)
                 .controlSize(.small)
-                .disabled(model.micOffReason != nil && model.activePlayer == nil)
+                .disabled(model.micOffReason != nil && model.activePlayer == nil && model.heldAfterPlayer == nil)
                 .focusable(false)
                 .fixedSize()
                 if let device = model.selectedDevice, device.inputChannels > 2 {
@@ -270,7 +272,6 @@ struct MenuView: View {
         }
     }
 
-    @ViewBuilder
     /// The mic icon's tooltip: why it's off, when it is.
     private var micHelp: String {
         switch model.micOffReason {
@@ -280,6 +281,7 @@ struct MenuView: View {
         case .paused: return "Mic muted"
         case .autoPaused(let minutes): return "Paused after \(minutes) minutes without music; playing something wakes it"
         case .peer(let host): return "\(AppModel.shown(host)) is playing, so this Mac is standing by"
+        case .afterPlayer(let name): return "\(name) stopped; the mic stays off until you turn it on"
         }
     }
 
@@ -299,6 +301,10 @@ struct MenuView: View {
                     .help("Playing something wakes it")
                 Spacer()
                 Button("Resume") { model.togglePause() }.controlSize(.small)
+            case .afterPlayer(let name):
+                Text("\(name) stopped. Listen with the mic?")
+                Spacer()
+                Button("Listen") { model.listenAfterPlayer() }.controlSize(.small)
             case .peer(let host):
                 Text("\(AppModel.shown(host)) is playing; standing by.")
                 Spacer()
@@ -392,6 +398,7 @@ struct MenuView: View {
         if model.peerHasControl { return model.remote?.track == nil ? "Identifying" : "Playing" }
         if model.pausedManually { return "Muted" }
         if model.autoPaused { return "Paused" }
+        if model.heldAfterPlayer != nil { return "Stopped" }
         if model.activePlayer != nil { return "Playing" }
         return switch model.machine.state {
         case .idle: "Idle"
@@ -408,7 +415,7 @@ struct MenuView: View {
 
     private var stateColor: Color {
         if model.peerHasControl { return model.remote?.track == nil ? .orange : .green }
-        if model.pausedManually || model.autoPaused { return .gray }
+        if model.pausedManually || model.autoPaused || model.heldAfterPlayer != nil { return .gray }
         if model.activePlayer != nil { return .green }
         return switch model.machine.state {
         case .idle: .gray

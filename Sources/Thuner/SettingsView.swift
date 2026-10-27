@@ -52,10 +52,11 @@ struct SettingsView: View {
                     Section {
                         Toggle("Apple Music", isOn: $model.useAppleMusic)
                         Toggle("Spotify", isOn: $model.useSpotify)
+                        Toggle("Ask before turning the mic on when one stops", isOn: $model.askBeforeMicAfterPlayer)
                     } header: {
                         Text("Follow players on this Mac")
                     } footer: {
-                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause.")
+                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause. When the player stops, the mic waits for Listen in the menu unless asking is off.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {

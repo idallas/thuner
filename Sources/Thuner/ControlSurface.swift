@@ -126,7 +126,7 @@ final class ControlSurface {
     /// Works out every control's state from the model and tells observers about the ones that changed.
     func refresh(at now: Date = Date()) {
         let r = Self.thresholdRange
-        update("listening", State(on: model.micEnabled && !model.pausedManually && !model.autoPaused))
+        update("listening", State(on: model.micEnabled && !model.pausedManually && !model.autoPaused && model.heldAfterPlayer == nil))
         update("threshold", State(value: (model.thresholdDB - r.lowerBound) / (r.upperBound - r.lowerBound),
                                   text: "\(Int(model.thresholdDB)) dB"))
         update("radio", State(on: model.radioMode))
