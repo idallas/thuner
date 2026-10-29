@@ -30,6 +30,15 @@ fi
 
 VERSION=${1:?usage: Scripts/release.sh <version> [release notes]}
 NOTES=${2:-}
+# Versions restarted at 0.14.0 after 1.3.5. The 1.x numbers already shipped stay retired, so a later 1.x can't be
+# mistaken for (or overwrite the zip of) an old one: 1.0.0, 1.0.1 and the whole of 1.1–1.3.
+case $VERSION in
+  1.0.0|1.0.0-*|1.0.1|1.0.1-*|1.[123]|1.[123].*|1.[123]-*)
+    echo "error: $VERSION is a retired version number (1.0.0, 1.0.1 and 1.1–1.3 shipped before the restart at 0.14.0)" >&2; exit 1 ;;
+esac
+if [[ -e $WEBSITE_DIR/thuner/updates/ThUNER-$VERSION.zip ]] || grep -q "<sparkle:shortVersionString>$VERSION<" "$WEBSITE_DIR/thuner/appcast.xml"; then
+  echo "error: $VERSION has been released already" >&2; exit 1
+fi
 NOTARY_PROFILE=${NOTARY_PROFILE:-thuner-notary}
 BUILD_NUMBER=$(date -u +%Y%m%d%H%M)   # always increasing, which is what Sparkle compares
 SPARKLE_BIN=.build/artifacts/sparkle/Sparkle/bin
