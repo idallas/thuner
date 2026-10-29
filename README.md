@@ -10,6 +10,7 @@ A macOS menu bar app that knows what's playing (from a turntable, the room, a br
 
 - **Listens carefully.** It identifies a line-in, a microphone or the Mac's own audio (a Core Audio process tap, which can be limited to certain apps) with ShazamKit. It waits for two results that agree before changing anything. It stays quiet below an adjustable silence threshold, and checks each confirmed track again near its predicted end.
 - **Reads players directly.** It takes Apple Music and Spotify tracks from the apps' own notifications, with no permissions needed, and turns the mic off while they play.
+- **Follows websites.** Point the [Web Scrobbler](https://web-scrobbler.com) browser extension's Webhook at ThUNER (Settings → General copies the URL) and YouTube Music, Bandcamp, SoundCloud and the rest count as a player too: cover on the Tuneshine, scrobbled by ThUNER.
 - **Shows the cover:**
   - on a Tuneshine, found on the network, by uploading a 64×64 WebP to its local API
   - in a floating window or a pinnable panel
@@ -98,6 +99,6 @@ MIT; see [LICENSE](LICENSE). Third-party licenses are in [THIRD_PARTY_NOTICES.md
 
 The MIT license covers the code, not the name or the icon. "ThUNER" and the ThUNER icon identify this project and the builds published at [idallas.com/software/thuner](https://idallas.com/software/thuner/). If you distribute a fork or a modified build, give it its own name and icon. Saying it's based on ThUNER is fine, and appreciated.
 
-ThUNER isn't affiliated with or endorsed by Apple, Shazam, Spotify, Last.fm, ListenBrainz or Tuneshine. Their names are used only to describe what ThUNER works with.
+ThUNER isn't affiliated with or endorsed by Apple, Shazam, Spotify, Last.fm, ListenBrainz, Web Scrobbler or Tuneshine. Their names are used only to describe what ThUNER works with.
 
 The name comes from an old nickname, after the surname Bethune, and it's a tuner: the bold letters spell TUNER. The h is silent.

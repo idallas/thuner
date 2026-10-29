@@ -59,6 +59,27 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
+                        Toggle("Follow websites", isOn: $model.useWebScrobbler)
+                        if model.webDisplayEnabled {
+                            LabeledContent("Webhook URL") {
+                                Button("Copy") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(model.webScrobblerURL, forType: .string)
+                                }
+                            }
+                            .disabled(!model.useWebScrobbler)
+                        } else {
+                            LabeledContent("Needs ThUNER's web server (Display)") {
+                                Button("Turn On") { model.webDisplayEnabled = true }
+                            }
+                        }
+                    } header: {
+                        Text("Websites through Web Scrobbler")
+                    } footer: {
+                        Text("For YouTube Music, Bandcamp, SoundCloud and the other sites the Web Scrobbler browser extension knows. In its settings, add a Webhook with this URL (any application name) and let it reach localhost when the browser asks. Turn off Web Scrobbler's own Last.fm, or plays are scrobbled twice: ThUNER scrobbles them. A new API token (Controls) changes the URL.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section {
                         StatusRow(title: "Microphone", state: micState, detail: micDetail) {
                             model.openPrivacySettings("Privacy_Microphone")
                         }

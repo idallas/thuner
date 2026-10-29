@@ -27,21 +27,23 @@ enum PlayerControl {
         case failed(String)
     }
 
-    static func bundleID(_ source: PlayerMonitor.Source) -> String {
+    /// The app to script; nil for a website (nothing ThUNER can control).
+    static func bundleID(_ source: PlayerMonitor.Source) -> String? {
         switch source {
         case .appleMusic: "com.apple.Music"
         case .spotify: "com.spotify.client"
+        case .browser: nil
         }
     }
 
     static func isRunning(_ source: PlayerMonitor.Source) -> Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID(source)).isEmpty
+        guard let id = bundleID(source) else { return false }
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
     }
 
     /// Whether ThUNER may control the app, without asking: nil if it hasn't been asked yet (or the app isn't open).
     static func isAllowed(_ source: PlayerMonitor.Source) -> Bool? {
-        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID(source))
-        guard let desc = target.aeDesc else { return nil }
+        guard let id = bundleID(source), let desc = NSAppleEventDescriptor(bundleIdentifier: id).aeDesc else { return nil }
         switch AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, false) {
         case noErr: return true
         case OSStatus(errAEEventNotPermitted): return false
@@ -57,8 +59,8 @@ enum PlayerControl {
     /// The current track's cover, straight from the Music app, for tracks Apple's catalogue search can't find.
     /// Only when ThUNER may already control Music (granted through the playback buttons): this never asks.
     static func currentArtwork(_ source: PlayerMonitor.Source) async -> Data? {
-        guard source == .appleMusic, isRunning(source), isAllowed(source) == true else { return nil }
-        let script = "tell application id \"\(bundleID(source))\" to get raw data of artwork 1 of current track"
+        guard source == .appleMusic, isRunning(source), isAllowed(source) == true, let id = bundleID(source) else { return nil }
+        let script = "tell application id \"\(id)\" to get raw data of artwork 1 of current track"
         return await withCheckedContinuation { continuation in
             queue.async {
                 var error: NSDictionary?
@@ -88,6 +90,7 @@ enum PlayerControl {
                 return {name of t, artist of t, album of t, duration of t, id of t, player position}
             end tell
             """
+        case .browser: ""
         }
         let result: NSAppleEventDescriptor? = await withCheckedContinuation { continuation in
             queue.async {
@@ -108,13 +111,14 @@ enum PlayerControl {
             if duration > 0 { info["Duration"] = duration }  // already ms
             if let id = list.atIndex(5)?.stringValue { info["Track ID"] = id }
             if let position = list.atIndex(6)?.doubleValue { info["Playback Position"] = position }
+        case .browser: break
         }
         return info
     }
 
     static func send(_ command: Command, to source: PlayerMonitor.Source) async -> Outcome {
-        guard isRunning(source) else { return .notRunning }
-        let script = "tell application id \"\(bundleID(source))\" to \(command.script)"
+        guard isRunning(source), let id = bundleID(source) else { return .notRunning }
+        let script = "tell application id \"\(id)\" to \(command.script)"
         return await withCheckedContinuation { continuation in
             queue.async {
                 var error: NSDictionary?

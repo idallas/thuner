@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import os
+import ThunerCore
 
 /// ThUNER's small HTTP server: the web display, and an API to ThUNER's controls for anything on the network
 /// (Home Assistant, Stream Deck/Companion, scripts, dashboards).
@@ -47,6 +48,8 @@ final class WebDisplayServer: @unchecked Sendable {
 
     /// Called (on the main queue) to carry out an authorized action on a control.
     var onAction: (@Sendable (_ id: String, _ action: Action) -> Void)?
+    /// Called (on the main queue) with each event from Web Scrobbler's webhook.
+    var onWebScrobbler: (@Sendable (WebScrobblerEvent) -> Void)?
 
     private let queue = DispatchQueue(label: "com.idallas.thuner.web")
     private let lock = NSLock()
@@ -242,6 +245,7 @@ final class WebDisplayServer: @unchecked Sendable {
                     "GET /api/events": "Server-Sent Events: a snapshot, then control and nowPlaying changes (?levels=1 adds the live input meter, ~10/s)",
                     "POST /api/controls/<id>": "{\"value\": 0-1} turns a level, {\"press\": true} presses, {\"on\": bool} sets a toggle",
                     "GET /now.json": "what's playing",
+                    "POST /webscrobbler": "the Web Scrobbler browser extension's Webhook (nowplaying, paused, resumedplaying)",
                 ],
                 "auth": "POST needs 'Authorization: Bearer <token>' or ?token=<token> (token in ThUNER Settings → Controls), except from scripts on this Mac; web pages always need it",
             ])
@@ -261,6 +265,8 @@ final class WebDisplayServer: @unchecked Sendable {
             }
         case ("POST", let path) where path.hasPrefix("/api/controls/"):
             act(on: String(path.dropFirst("/api/controls/".count)), request: request, connection: connection)
+        case ("POST", "/webscrobbler"):
+            receiveWebScrobbler(request, connection: connection)
         default:
             sendJSON(connection, ["error": "not found"], status: "404 Not Found")
         }
@@ -296,6 +302,20 @@ final class WebDisplayServer: @unchecked Sendable {
         }
         let handler = onAction
         DispatchQueue.main.async { handler?(id, action) }
+        sendJSON(connection, ["ok": true])
+    }
+
+    /// The Web Scrobbler extension's webhook. It can't add headers, so its URL carries `?token=`. Events ThUNER
+    /// doesn't use (a love, a podcast) still get a 200: anything else shows as an error in the extension.
+    private func receiveWebScrobbler(_ request: Request, connection: NWConnection) {
+        guard authorized(request, connection) else {
+            sendJSON(connection, ["error": "unauthorized: the webhook URL needs ?token= from ThUNER's Settings"], status: "401 Unauthorized")
+            return
+        }
+        if let event = WebScrobblerEvent.parse(request.body) {
+            let handler = onWebScrobbler
+            DispatchQueue.main.async { handler?(event) }
+        }
         sendJSON(connection, ["ok": true])
     }
 

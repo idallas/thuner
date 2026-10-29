@@ -300,6 +300,11 @@ final class AppModel {
         return URL(string: "http://\(name):\(WebDisplayServer.defaultPort)/")!
     }
 
+    /// What to give Web Scrobbler as its Webhook's API URL. The browser is on this Mac, so localhost.
+    var webScrobblerURL: String {
+        "http://localhost:\(WebDisplayServer.defaultPort)/webscrobbler?token=\(apiToken)"
+    }
+
     /// Where a cover saved by LocalArtwork can be loaded from: ThUNER's web server at this Mac's IP address (so the
     /// Tuneshine and other Macs can fetch it), localhost when the server is for this Mac only, or the file itself
     /// when the server is off (then only this Mac shows it).
@@ -320,6 +325,8 @@ final class AppModel {
     /// Use the Music / Spotify apps' own now-playing info instead of Shazam while they're playing.
     var useAppleMusic: Bool { didSet { save(useAppleMusic, "useAppleMusic"); playerChanged() } }
     var useSpotify: Bool { didSet { save(useSpotify, "useSpotify"); playerChanged() } }
+    /// Follow websites through the Web Scrobbler browser extension (its Webhook pointed at `webScrobblerURL`).
+    var useWebScrobbler: Bool { didSet { save(useWebScrobbler, "useWebScrobbler"); playerChanged() } }
     /// When a player stops, keep the mic off until asked (Listen in the panel) instead of turning it on.
     var askBeforeMicAfterPlayer: Bool {
         didSet {
@@ -518,7 +525,7 @@ final class AppModel {
         if pausedManually { return .paused }
         if autoPaused { return .autoPaused(Int(autoPauseMinutes)) }
         if peerHasControl, let remote { return .peer(remote.host) }
-        if let player = activePlayer { return .player(player.source.rawValue) }
+        if let player = activePlayer { return .player(player.name) }
         if let held = heldAfterPlayer { return .afterPlayer(held) }
         return nil
     }
@@ -953,6 +960,7 @@ final class AppModel {
         streamPassword = Keychain.read(String.self, account: "stream-password") ?? ""
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
+        useWebScrobbler = d.object(forKey: "useWebScrobbler") as? Bool ?? true
         askBeforeMicAfterPlayer = d.object(forKey: "askBeforeMicAfterPlayer") as? Bool ?? true
         gate = LevelGate(thresholdDB: threshold)
         arbiter = PushArbiter(role: role)
@@ -1423,6 +1431,7 @@ final class AppModel {
             note("Lost touch with \(r.host); listening here again")
         }
         checkAutoPause(at: now)
+        players.expireBrowser(at: now)
         noteRecentAudioApps(at: now)
         updateControllablePlayer()
         if streamSharing, !streamSender.idle, let since = silentSince, now.timeIntervalSince(since) > Self.streamIdleAfter {
@@ -1509,9 +1518,10 @@ final class AppModel {
                 let source: PlayHistory.Source = switch activePlayer?.source {
                 case .appleMusic: .appleMusic
                 case .spotify: .spotify
+                case .browser: .browser
                 case nil: .shazam
                 }
-                history.record(track, startedAt: play.startedAt, source: source)
+                history.record(track, startedAt: play.startedAt, source: source, host: activePlayer?.site)
                 saveHistory()
             }
             handleScrobble(action, at: now)
@@ -1542,7 +1552,7 @@ final class AppModel {
             now.source = remote.map { "On \($0.host)" }
         } else if let player = activePlayer {
             now.state = "playing"
-            now.source = player.source.rawValue
+            now.source = player.name
         } else {
             now.state = switch machine.state {
             case .idle: "idle"
@@ -1620,6 +1630,9 @@ final class AppModel {
         })
         let server = webDisplay
         controls.observers.append { id, state in server.controlChanged(id, state) }
+        webDisplay.onWebScrobbler = { [weak self] event in
+            MainActor.assumeIsolated { self?.players.receivedWebScrobbler(event) }
+        }
         webDisplay.onAction = { [weak self] id, action in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -1677,10 +1690,18 @@ final class AppModel {
 
     // MARK: Spotify / Apple Music
 
+    private func follows(_ source: PlayerMonitor.Source) -> Bool {
+        switch source {
+        case .appleMusic: useAppleMusic
+        case .spotify: useSpotify
+        case .browser: useWebScrobbler
+        }
+    }
+
     private func playerChanged() {
         defer { updateControllablePlayer() }
         let enabled = players.latest.values.filter {
-            $0.isPlaying && ($0.source == .appleMusic ? useAppleMusic : useSpotify)
+            $0.isPlaying && follows($0.source)
         }
         let playing = enabled.max { $0.receivedAt < $1.receivedAt }
         let previous = activePlayer
@@ -1691,8 +1712,8 @@ final class AppModel {
             if wasActive {
                 clearAfterQuietSince = Date()
                 if askBeforeMicAfterPlayer, micEnabled, let stopped = previous {
-                    heldAfterPlayer = stopped.source.rawValue
-                    note("\(stopped.source.rawValue) stopped; mic stays off until you ask")
+                    heldAfterPlayer = stopped.name
+                    note("\(stopped.name) stopped; mic stays off until you ask")
                 } else {
                     note("Player stopped; mic back on for Shazam")
                 }
@@ -1702,21 +1723,21 @@ final class AppModel {
         }
         clearAfterQuietSince = nil
         heldAfterPlayer = nil
-        if autoPaused { wake("\(playing.source.rawValue) started playing") }
-        if !wasActive { note("Using \(playing.source.rawValue) instead of Shazam; mic off") }
+        if autoPaused { wake("\(playing.name) started playing") }
+        if !wasActive { note("Using \(playing.name) instead of Shazam; mic off") }
         updateCapture()
         if let shown = machine.displayed, shown.isSameSong(as: playing.track) { return }
 
         machine.displayedExternally(playing.track)
         guard playing.track.artworkURL != nil else {
-            note("\(playing.source.rawValue): \(playing.track.displayName) (no artwork found, display unchanged)")
+            note("\(playing.name): \(playing.track.displayName) (no artwork found, display unchanged)")
             return
         }
         if canPush(at: Date()) {
             push(playing.track)
         } else {
             deferredPush = playing.track
-            note("\(playing.track.displayName) on \(playing.source.rawValue), but the turntable Mac has the display")
+            note("\(playing.track.displayName) on \(playing.name), but the turntable Mac has the display")
         }
     }
 

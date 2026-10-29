@@ -3,7 +3,8 @@ import ThunerCore
 import os
 
 /// Watches the Music and Spotify apps on this Mac. Both post a distributed notification on every track
-/// change and play/pause with the track's details, so this needs no permissions and no polling.
+/// change and play/pause with the track's details, so this needs no permissions and no polling. Websites come in
+/// through the Web Scrobbler browser extension's webhook (`receivedWebScrobbler`), as a third player.
 ///
 /// The notifications only fire on changes, so whatever was already playing when Thuner launched shows up at
 /// the next track change or play/pause.
@@ -12,6 +13,8 @@ final class PlayerMonitor {
     enum Source: String {
         case appleMusic = "Apple Music"
         case spotify = "Spotify"
+        /// A website, through Web Scrobbler. `Snapshot.site` says which.
+        case browser = "Browser"
     }
 
     struct Snapshot: Equatable {
@@ -21,6 +24,11 @@ final class PlayerMonitor {
         /// Seconds into the track when the notification arrived, if the player says.
         var position: TimeInterval?
         var receivedAt: Date
+        /// For `.browser`: the site ("YouTube Music", "Bandcamp"…).
+        var site: String?
+
+        /// What to call it: the app, or the website.
+        var name: String { site ?? source.rawValue }
     }
 
     /// Called with each change, after artwork has been looked up.
@@ -37,11 +45,11 @@ final class PlayerMonitor {
         let center = DistributedNotificationCenter.default()
         observers.append(center.addObserver(forName: Notification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main) { [weak self] n in
             let info = n.userInfo ?? [:]
-            MainActor.assumeIsolated { self?.receivedMusic(info) }
+            MainActor.assumeIsolated { _ = self?.receivedMusic(info) }
         })
         observers.append(center.addObserver(forName: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil, queue: .main) { [weak self] n in
             let info = n.userInfo ?? [:]
-            MainActor.assumeIsolated { self?.receivedSpotify(info) }
+            MainActor.assumeIsolated { _ = self?.receivedSpotify(info) }
         })
     }
 
@@ -55,6 +63,35 @@ final class PlayerMonitor {
             let lookup = source == .appleMusic ? receivedMusic(info) : receivedSpotify(info)
             await lookup?.value
         }
+    }
+
+    /// An event from Web Scrobbler's webhook. Pausing ends the play; a scrobble or love changes nothing here (ThUNER
+    /// counts plays itself, as for the apps).
+    func receivedWebScrobbler(_ event: WebScrobblerEvent) {
+        guard !event.isPodcast else { return }
+        switch event.kind {
+        case .nowPlaying, .resumed:
+            update(.browser, track: event.track, playing: true, position: event.position,
+                   site: event.site, siteArtwork: event.siteArtwork)
+        case .paused:
+            update(.browser, track: event.track, playing: false, position: event.position,
+                   site: event.site, siteArtwork: event.siteArtwork)
+        case .scrobble, .loved:
+            break
+        }
+    }
+
+    /// A website that went quiet without saying so (its tab closed, the browser quit): Web Scrobbler sends nothing
+    /// then, so a play ends once the song should have finished, plus a little, or after 10 minutes without a length.
+    func expireBrowser(at now: Date) {
+        guard let browser = latest[.browser], browser.isPlaying else { return }
+        let remaining = browser.track.duration.map { max($0 - (browser.position ?? 0), 0) } ?? 600
+        guard now.timeIntervalSince(browser.receivedAt) > remaining + 30 else { return }
+        log.notice("\(browser.name, privacy: .public): no word since the song should have ended; counting it as stopped")
+        var stopped = browser
+        stopped.isPlaying = false
+        stopped.receivedAt = now
+        emit(stopped)
     }
 
     @discardableResult
@@ -86,7 +123,8 @@ final class PlayerMonitor {
 
     /// Passes the change on, after looking up artwork for a new track; the returned task finishes once it has.
     @discardableResult
-    private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?) -> Task<Void, Never>? {
+    private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?,
+                        site: String? = nil, siteArtwork: URL? = nil) -> Task<Void, Never>? {
         guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
@@ -95,18 +133,22 @@ final class PlayerMonitor {
             var t = track
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt))
+            t.duration = t.duration ?? previous.track.duration
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site))
             return nil
         }
-        log.notice("\(source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
+        log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
         return Task {
             let found = await artwork.find(for: track)
             var t = track
             t.artworkURL = found.url
             if t.artworkURL == nil, let playerArtwork { t.artworkURL = await playerArtwork(source) }
+            // The site's own picture last: often a video thumbnail rather than the cover, and the Tuneshine has to
+            // fetch it itself.
+            if t.artworkURL == nil { t.artworkURL = siteArtwork }
             t.appleMusicID = found.appleMusicID
             if t.duration == nil { t.duration = found.duration }
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt))
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site))
         }
     }
 

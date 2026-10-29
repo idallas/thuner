@@ -409,7 +409,7 @@ struct MenuView: View {
 
     private var stateDetail: String? {
         if model.peerHasControl { return model.remote.map { AppModel.shown($0.host) } }
-        if let player = model.activePlayer { return player.source.rawValue }
+        if let player = model.activePlayer { return player.name }
         return model.machine.state == .playing ? "Shazam" : nil
     }
 

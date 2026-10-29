@@ -162,6 +162,7 @@ struct HistoryView: View {
         case .appleMusic: "music.note"
         case .spotify: "dot.radiowaves.left.and.right"
         case .anotherMac: "opticaldisc"
+        case .browser: "globe"
         }
     }
 }
