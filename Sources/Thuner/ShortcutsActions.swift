@@ -129,11 +129,11 @@ struct SetRadioModeIntent: AppIntent {
     }
 }
 
-// MARK: Playback (Apple Music and Spotify)
+// MARK: Playback (Apple Music, Spotify and websites)
 
 struct PlayPauseIntent: AppIntent {
     static let title: LocalizedStringResource = "Play or Pause"
-    static let description = IntentDescription("Plays or pauses Apple Music or Spotify, whichever ThUNER is following. macOS asks once whether ThUNER may control each app.")
+    static let description = IntentDescription("Plays or pauses Apple Music, Spotify or a website, whichever ThUNER is following. macOS asks once whether ThUNER may control each app (for websites: press media keys).")
     static let openAppWhenRun = false
 
     @MainActor
@@ -144,7 +144,7 @@ struct PlayPauseIntent: AppIntent {
 
 struct NextTrackIntent: AppIntent {
     static let title: LocalizedStringResource = "Next Track"
-    static let description = IntentDescription("Skips to the next track in Apple Music or Spotify, whichever ThUNER is following.")
+    static let description = IntentDescription("Skips to the next track in Apple Music, Spotify or a website, whichever ThUNER is following.")
     static let openAppWhenRun = false
 
     @MainActor
@@ -155,7 +155,7 @@ struct NextTrackIntent: AppIntent {
 
 struct PreviousTrackIntent: AppIntent {
     static let title: LocalizedStringResource = "Previous Track"
-    static let description = IntentDescription("Goes back a track in Apple Music or Spotify, whichever ThUNER is following.")
+    static let description = IntentDescription("Goes back a track in Apple Music, Spotify or a website, whichever ThUNER is following.")
     static let openAppWhenRun = false
 
     @MainActor

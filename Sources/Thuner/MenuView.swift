@@ -102,7 +102,7 @@ struct MenuView: View {
             .frame(width: 92, height: 92)
             .background(.quaternary)
             .overlay {
-                // Playback controls on hover, for Apple Music and Spotify.
+                // Playback controls on hover, for Apple Music, Spotify and websites.
                 if hoveringCover, model.controllablePlayer != nil {
                     ZStack {
                         Color.black.opacity(0.25)

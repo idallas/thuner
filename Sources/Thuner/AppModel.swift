@@ -409,7 +409,8 @@ final class AppModel {
 
     // MARK: Playback controls
 
-    /// What the playback controls act on: the most recently active of Apple Music and Spotify that's still open.
+    /// What the playback controls act on: the most recently active of Apple Music, Spotify and a website that's still
+    /// open (for a website, its browser).
     /// A paused one counts only while ThUNER isn't showing something else (the turntable Mac's record, say).
     private(set) var controllablePlayer: PlayerMonitor.Snapshot?
     /// Shown for a while when a control couldn't be used (ThUNER not allowed to control the app, say).
@@ -417,7 +418,7 @@ final class AppModel {
     @ObservationIgnored private var playbackProblemTask: Task<Void, Never>?
 
     private func updateControllablePlayer() {
-        var player = players.latest.values.filter { PlayerControl.isRunning($0.source) }.max { $0.receivedAt < $1.receivedAt }
+        var player = players.latest.values.filter { PlayerControl.isRunning($0) }.max { $0.receivedAt < $1.receivedAt }
         if let p = player, !p.isPlaying {
             if peerHasControl || shownTrack.map({ !$0.isSameSong(as: p.track) }) == true { player = nil }
         }
@@ -425,7 +426,7 @@ final class AppModel {
     }
 
     /// Play/pause or skip in the player the controls act on. The first time for each app, macOS asks whether
-    /// ThUNER may control it.
+    /// ThUNER may control it; for a website, whether it may press media keys (Accessibility).
     func playback(_ command: PlayerControl.Command) {
         Task { _ = await playbackResult(command) }
     }
@@ -433,12 +434,12 @@ final class AppModel {
     /// Does it, and says what happened (for Shortcuts): "Playing", or what got in the way.
     func playbackResult(_ command: PlayerControl.Command) async -> String {
         guard let player = controllablePlayer else {
-            let text = "Nothing to control: playback controls work with Apple Music and Spotify"
+            let text = "Nothing to control: playback controls work with Apple Music, Spotify and websites"
             showPlaybackProblem(text)
             return text
         }
-        let name = player.source.rawValue
-        switch await PlayerControl.send(command, to: player.source) {
+        let name = player.name
+        switch await PlayerControl.send(command, to: player) {
         case .done:
             playbackProblem = nil
             switch command {
@@ -447,11 +448,13 @@ final class AppModel {
             case .previous: return "\(name): previous track"
             }
         case .notRunning:
-            let text = "\(name) isn't open"
+            let text = "\(player.browser?.name ?? name) isn't open"
             showPlaybackProblem(text)
             return text
         case .notAllowed:
-            let text = "Allow ThUNER to control \(name): System Settings → Privacy & Security → Automation"
+            let text = player.source == .browser
+                ? "Allow ThUNER to press media keys for \(name): System Settings → Privacy & Security → Accessibility"
+                : "Allow ThUNER to control \(name): System Settings → Privacy & Security → Automation"
             showPlaybackProblem(text)
             return text
         case .failed(let message):

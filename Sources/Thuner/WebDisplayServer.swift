@@ -312,7 +312,8 @@ final class WebDisplayServer: @unchecked Sendable {
             sendJSON(connection, ["error": "unauthorized: the webhook URL needs ?token= from ThUNER's Settings"], status: "401 Unauthorized")
             return
         }
-        if let event = WebScrobblerEvent.parse(request.body) {
+        if var event = WebScrobblerEvent.parse(request.body) {
+            event.browser = request.headers["user-agent"].flatMap(WebScrobblerEvent.Browser.init(userAgent:))
             let handler = onWebScrobbler
             DispatchQueue.main.async { handler?(event) }
         }

@@ -26,6 +26,8 @@ final class PlayerMonitor {
         var receivedAt: Date
         /// For `.browser`: the site ("YouTube Music", "Bandcamp"…).
         var site: String?
+        /// For `.browser`: the browser it plays in, when Web Scrobbler's request said.
+        var browser: WebScrobblerEvent.Browser?
 
         /// What to call it: the app, or the website.
         var name: String { site ?? source.rawValue }
@@ -72,10 +74,10 @@ final class PlayerMonitor {
         switch event.kind {
         case .nowPlaying, .resumed:
             update(.browser, track: event.track, playing: true, position: event.position,
-                   site: event.site, siteArtwork: event.siteArtwork)
+                   site: event.site, siteArtwork: event.siteArtwork, browser: event.browser)
         case .paused:
             update(.browser, track: event.track, playing: false, position: event.position,
-                   site: event.site, siteArtwork: event.siteArtwork)
+                   site: event.site, siteArtwork: event.siteArtwork, browser: event.browser)
         case .scrobble, .loved:
             break
         }
@@ -124,7 +126,8 @@ final class PlayerMonitor {
     /// Passes the change on, after looking up artwork for a new track; the returned task finishes once it has.
     @discardableResult
     private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?,
-                        site: String? = nil, siteArtwork: URL? = nil) -> Task<Void, Never>? {
+                        site: String? = nil, siteArtwork: URL? = nil,
+                        browser: WebScrobblerEvent.Browser? = nil) -> Task<Void, Never>? {
         guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
@@ -134,7 +137,7 @@ final class PlayerMonitor {
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
             t.duration = t.duration ?? previous.track.duration
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site))
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser))
             return nil
         }
         log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
@@ -148,7 +151,7 @@ final class PlayerMonitor {
             if t.artworkURL == nil { t.artworkURL = siteArtwork }
             t.appleMusicID = found.appleMusicID
             if t.duration == nil { t.duration = found.duration }
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site))
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser))
         }
     }
 

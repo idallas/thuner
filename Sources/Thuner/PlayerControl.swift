@@ -2,9 +2,13 @@ import AppKit
 import Foundation
 import os
 
-/// Play/pause and skipping in Apple Music and Spotify, for the playback controls. Reading what they play needs no
-/// permission (PlayerMonitor listens to their notifications); controlling them is AppleScript, which macOS asks
-/// about (Privacy & Security → Automation) the first time a control is used, never before.
+/// Play/pause and skipping in Apple Music, Spotify and websites, for the playback controls. Reading what they play
+/// needs no permission (PlayerMonitor listens to their notifications); controlling the apps is AppleScript, which
+/// macOS asks about (Privacy & Security → Automation) the first time a control is used, never before.
+///
+/// A browser tab can't be scripted, so for a website ThUNER presses the keyboard's media keys: browsers answer them
+/// (macOS sends them to whatever it thinks is playing). Faking a key press needs Accessibility permission, again
+/// asked the first time, never before.
 enum PlayerControl {
     enum Command: String, Sendable {
         case playPause, next, previous
@@ -14,6 +18,15 @@ enum PlayerControl {
             case .playPause: "playpause"
             case .next: "next track"
             case .previous: "previous track"
+            }
+        }
+
+        /// The media key that does the same (`NX_KEYTYPE_PLAY`, `_NEXT`, `_PREVIOUS` in IOKit's ev_keymap.h).
+        var mediaKey: Int {
+            switch self {
+            case .playPause: 16
+            case .next: 17
+            case .previous: 18
             }
         }
     }
@@ -27,7 +40,7 @@ enum PlayerControl {
         case failed(String)
     }
 
-    /// The app to script; nil for a website (nothing ThUNER can control).
+    /// The app to script; nil for a website (media keys instead).
     static func bundleID(_ source: PlayerMonitor.Source) -> String? {
         switch source {
         case .appleMusic: "com.apple.Music"
@@ -38,7 +51,18 @@ enum PlayerControl {
 
     static func isRunning(_ source: PlayerMonitor.Source) -> Bool {
         guard let id = bundleID(source) else { return false }
-        return !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty
+        return isRunning([id])
+    }
+
+    /// Whether there's something to control: the app is open, or for a website, its browser (if the webhook said
+    /// which; otherwise assume so). With nothing open, the play key would start Apple Music instead.
+    static func isRunning(_ player: PlayerMonitor.Snapshot) -> Bool {
+        guard player.source == .browser else { return isRunning(player.source) }
+        return player.browser.map { isRunning($0.bundleIDs) } ?? true
+    }
+
+    private static func isRunning(_ bundleIDs: [String]) -> Bool {
+        bundleIDs.contains { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty }
     }
 
     /// Whether ThUNER may control the app, without asking: nil if it hasn't been asked yet (or the app isn't open).
@@ -116,8 +140,10 @@ enum PlayerControl {
         return info
     }
 
-    static func send(_ command: Command, to source: PlayerMonitor.Source) async -> Outcome {
-        guard isRunning(source), let id = bundleID(source) else { return .notRunning }
+    static func send(_ command: Command, to player: PlayerMonitor.Snapshot) async -> Outcome {
+        guard isRunning(player) else { return .notRunning }
+        let source = player.source
+        guard let id = bundleID(source) else { return pressMediaKey(command) }
         let script = "tell application id \"\(id)\" to \(command.script)"
         return await withCheckedContinuation { continuation in
             queue.async {
@@ -135,5 +161,27 @@ enum PlayerControl {
                 continuation.resume(returning: outcome)
             }
         }
+    }
+
+    /// Whether ThUNER may press media keys, without asking.
+    static var mayPressKeys: Bool { CGPreflightPostEventAccess() }
+
+    /// Presses and releases a media key, as the keyboard would. The first time, macOS asks for Accessibility
+    /// permission (its prompt leads to System Settings) and this reports `.notAllowed` until it's granted.
+    private static func pressMediaKey(_ command: Command) -> Outcome {
+        guard mayPressKeys || CGRequestPostEventAccess() else {
+            log.notice("\(command.rawValue, privacy: .public) by media key: no Accessibility permission")
+            return .notAllowed
+        }
+        for down in [true, false] {
+            let state = down ? 0xA : 0xB
+            let event = NSEvent.otherEvent(with: .systemDefined, location: .zero,
+                                           modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(state << 8)),
+                                           timestamp: 0, windowNumber: 0, context: nil,
+                                           subtype: 8, data1: command.mediaKey << 16 | state << 8, data2: -1)
+            guard let event = event?.cgEvent else { return .failed("couldn't make the key press") }
+            event.post(tap: .cghidEventTap)
+        }
+        return .done
     }
 }

@@ -72,6 +72,18 @@ private func payload(event: String = "nowplaying", processedArtist: String? = ni
         #expect(WebScrobblerEvent.parse(payload(event: "somethingNew")) == nil)
     }
 
+    @Test func knowsTheBrowser() {
+        let firefox = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0"
+        let chrome = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+        let edge = chrome + " Edg/141.0.0.0"
+        let safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        #expect(WebScrobblerEvent.Browser(userAgent: firefox)?.name == "Firefox")
+        #expect(WebScrobblerEvent.Browser(userAgent: chrome)?.bundleIDs.contains("com.brave.Browser") == true)
+        #expect(WebScrobblerEvent.Browser(userAgent: edge)?.name == "Edge")
+        #expect(WebScrobblerEvent.Browser(userAgent: safari)?.name == "Safari")
+        #expect(WebScrobblerEvent.Browser(userAgent: "curl/8.7.1") == nil)
+    }
+
     @Test func ignoresAnythingElse() {
         #expect(WebScrobblerEvent.parse(Data("not json".utf8)) == nil)
         #expect(WebScrobblerEvent.parse(Data(#"{"eventName":"nowplaying","data":{"song":{"parsed":{"track":"x"}}}}"#.utf8)) == nil)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Previous, play/pause and next for Apple Music or Spotify, on a translucent pill over a cover. Shown on hover,
+/// Previous, play/pause and next for Apple Music, Spotify or a website, on a translucent pill over a cover. Shown on hover,
 /// and only when there's a player to control (`AppModel.controllablePlayer`).
 struct PlaybackButtons: View {
     let model: AppModel
