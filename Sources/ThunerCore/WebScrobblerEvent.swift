@@ -63,7 +63,7 @@ public struct WebScrobblerEvent: Equatable, Sendable {
         }
         func number(_ value: Any?) -> Double? { (value as? NSNumber)?.doubleValue }
 
-        guard let artist = field("artist"), let title = field("track") else { return nil }
+        guard let artist = field("artist").map(withoutTopic), !artist.isEmpty, let title = field("track") else { return nil }
         var track = Track(title: title, artist: artist, album: field("album"))
         if let duration = number(parsed["duration"]) ?? number(processed["duration"]), duration > 0 {
             track.duration = duration
@@ -79,5 +79,11 @@ public struct WebScrobblerEvent: Equatable, Sendable {
             position: number(parsed["currentTime"]),
             startedAt: number(metadata["startTimestamp"]).map { Date(timeIntervalSince1970: $0) },
             isPodcast: parsed["isPodcast"] as? Bool ?? false)
+    }
+
+    /// YouTube's auto-generated channels are named "Artist - Topic", and Web Scrobbler doesn't always drop that.
+    static func withoutTopic(_ artist: String) -> String {
+        guard artist.hasSuffix(" - Topic") else { return artist }
+        return String(artist.dropLast(" - Topic".count)).trimmingCharacters(in: .whitespaces)
     }
 }

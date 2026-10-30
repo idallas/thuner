@@ -46,6 +46,8 @@ private func payload(event: String = "nowplaying", processedArtist: String? = ni
         #expect(event.kind == .nowPlaying)
         #expect(event.track.title == "Starlight")
         #expect(event.track.artist == "Muse")  // Web Scrobbler's correction wins over the site's "Muse - Topic"
+        #expect(WebScrobblerEvent.parse(payload(processedArtist: "Banner Pilot - Topic"))?.track.artist == "Banner Pilot")
+        #expect(WebScrobblerEvent.withoutTopic("Topic") == "Topic")
         #expect(event.track.album == "Black Holes and Revelations")
         #expect(event.track.duration == 240)
         #expect(event.site == "YouTube Music")
@@ -58,7 +60,7 @@ private func payload(event: String = "nowplaying", processedArtist: String? = ni
 
     @Test func fallsBackToWhatTheSiteShowed() throws {
         let event = try #require(WebScrobblerEvent.parse(payload(album: nil, trackArt: nil)))
-        #expect(event.track.artist == "Muse - Topic")
+        #expect(event.track.artist == "Muse")  // without YouTube's " - Topic"
         #expect(event.track.album == nil)
         #expect(event.siteArtwork == nil)
     }
