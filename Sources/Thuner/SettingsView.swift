@@ -550,6 +550,16 @@ private struct AddServiceSheet: View {
             }
         }
 
+        /// An example address for the server field, in this service's name.
+        var examplePrompt: String {
+            switch self {
+            case .listenBrainz, .other: "https://scrobbles.example.com"
+            case .maloja: "https://maloja.example.com"
+            case .koito: "https://koito.example.com"
+            case .multiScrobbler: "https://multi-scrobbler.example.com"
+            }
+        }
+
         var tokenHelp: String {
             switch self {
             case .listenBrainz: "Your user token is at listenbrainz.org/settings."
@@ -578,7 +588,7 @@ private struct AddServiceSheet: View {
                 if preset == .listenBrainz {
                     LabeledContent("Server", value: "api.listenbrainz.org")
                 } else {
-                    TextField("Server address", text: $serverURL, prompt: Text("https://maloja.example.com"))
+                    TextField("Server address", text: $serverURL, prompt: Text(preset.examplePrompt))
                 }
                 SecureField("Token", text: $token)
                 TextField("Name", text: $name, prompt: Text(preset == .other ? "Shown in ThUNER" : preset.rawValue))
