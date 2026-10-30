@@ -77,9 +77,9 @@ actor ListenBrainzService: ScrobbleService {
 
         var errorDescription: String? {
             switch self {
-            case .notConfigured: "The server address or token is missing"
-            case .cleartext(let host): "\(host) is reached over plain http, which would send the token unencrypted across the internet. Use an https:// address."
-            case .invalidToken(let message): "The server rejected the token\(message.isEmpty ? "" : ": \(message)")"
+            case .notConfigured: "The server address or API key is missing"
+            case .cleartext(let host): "\(host) is reached over plain http, which would send the API key unencrypted across the internet. Use an https:// address."
+            case .invalidToken(let message): "The server rejected the API key\(message.isEmpty ? "" : ": \(message)")"
             case .http(let code, let body): "Server returned HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
             }
         }

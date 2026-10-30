@@ -560,6 +560,16 @@ private struct AddServiceSheet: View {
             }
         }
 
+        /// What the service itself calls the secret: Maloja's and Koito's pages say "API key".
+        var tokenLabel: String {
+            switch self {
+            case .listenBrainz: "User token"
+            case .maloja, .koito: "API key"
+            case .multiScrobbler: "Token"
+            case .other: "Token or API key"
+            }
+        }
+
         var tokenHelp: String {
             switch self {
             case .listenBrainz: "Your user token is at listenbrainz.org/settings."
@@ -590,7 +600,7 @@ private struct AddServiceSheet: View {
                 } else {
                     TextField("Server address", text: $serverURL, prompt: Text(preset.examplePrompt))
                 }
-                SecureField("Token", text: $token)
+                SecureField(preset.tokenLabel, text: $token)
                 TextField("Name", text: $name, prompt: Text(preset == .other ? "Shown in ThUNER" : preset.rawValue))
             }
             .formStyle(.columns)
