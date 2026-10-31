@@ -7,6 +7,8 @@ protocol ScrobbleService: Actor {
     /// Stable id used in the play history: "lastfm", or the service's UUID.
     nonisolated var id: String { get }
     var displayName: String { get }
+    /// Where its scrobbles land (`ScrobbleDestination`), the same on every Mac; nil until it's connected.
+    var destination: String? { get }
     var isConnected: Bool { get }
     var pendingCount: Int { get }
 

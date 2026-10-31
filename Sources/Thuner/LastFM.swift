@@ -10,6 +10,7 @@ actor LastFM: ScrobbleService {
     nonisolated let id = "lastfm"
     var displayName: String { "Last.fm" }
     var isConnected: Bool { session != nil }
+    var destination: String? { session.map { ScrobbleDestination.lastFM(user: $0.username) } }
 
     struct Credentials: Codable, Equatable {
         var apiKey: String

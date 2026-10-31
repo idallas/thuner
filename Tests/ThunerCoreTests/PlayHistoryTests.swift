@@ -116,4 +116,14 @@ private let song = Track(title: "Sons of Thunder", artist: "High On Fire", durat
         #expect(loaded == history)
         #expect(loaded.entries[0].sourceName == "Shazam")
     }
+
+    @Test func destinationsMatchAcrossMacs() {
+        // Each Mac's settings may spell the same server and user differently.
+        let a = ScrobbleDestination.server(URL(string: "https://maloja.dallas.io/apis/listenbrainz")!, user: "Dallas")
+        let b = ScrobbleDestination.server(URL(string: "https://Maloja.dallas.io/apis/listenbrainz/")!, user: "dallas")
+        #expect(a == b)
+        #expect(a == "maloja.dallas.io/apis/listenbrainz/dallas")
+        #expect(ScrobbleDestination.server(URL(string: "https://koito.dallas.io/apis/listenbrainz")!, user: nil) != a)
+        #expect(ScrobbleDestination.lastFM(user: "DJDown") == "last.fm/djdown")
+    }
 }

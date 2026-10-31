@@ -17,6 +17,10 @@ final class PeerLink: NSObject, @unchecked Sendable {
             case active
             /// Went quiet: the other Mac can take over right away.
             case idle
+            /// A play came due for scrobbling: `nowPlaying` with `startedAt`, and where it went (`scrobbledTo`).
+            /// The other Mac sends it to its own services that aren't on the list. ThUNERs from before this case
+            /// can't decode the message and ignore it.
+            case scrobbled
         }
 
         var v = 1
@@ -30,6 +34,13 @@ final class PeerLink: NSObject, @unchecked Sendable {
         var track: String?
         /// What's playing there, with artwork, so the other Mac can show it.
         var nowPlaying: Track?
+        /// For `scrobbled`: when the play started.
+        var startedAt: Date?
+        /// For `scrobbled`: the services that have the play (sent, queued or already there), as
+        /// `ScrobbleDestination`s.
+        var scrobbledTo: [String]?
+        /// For `scrobbled`: scrobbling is paused there, so the play shouldn't be scrobbled anywhere.
+        var scrobblingPaused: Bool?
     }
 
     static let port: UInt16 = 47_474
@@ -102,9 +113,20 @@ final class PeerLink: NSObject, @unchecked Sendable {
     }
 
     func send(_ event: Message.Event, role: String, nowPlaying: Track?) {
+        deliver(Message(instance: instance, host: host, role: role, event: event,
+                        track: nowPlaying?.displayName, nowPlaying: nowPlaying))
+    }
+
+    /// Tells the other ThUNERs a play came due for scrobbling and which services have it.
+    func sendScrobbled(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool, role: String) {
+        deliver(Message(instance: instance, host: host, role: role, event: .scrobbled, track: track.displayName,
+                        nowPlaying: track, startedAt: startedAt, scrobbledTo: destinations, scrobblingPaused: paused))
+    }
+
+    private func deliver(_ message: Message) {
         guard fd >= 0 else { return }
-        let message = Message(instance: instance, host: host, role: role, event: event,
-                              track: nowPlaying?.displayName, nowPlaying: nowPlaying)
+        let event = message.event
+        let nowPlaying = message.nowPlaying
         guard let data = try? JSONEncoder().encode(message) else { return }
         var broadcast = sockaddr_in()
         broadcast.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)

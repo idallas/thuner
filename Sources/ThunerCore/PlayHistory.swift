@@ -183,3 +183,17 @@ public struct RemoteScrobble: Equatable, Sendable {
         }
     }
 }
+
+/// Where a service's scrobbles land, written the same way on every Mac, so the turntable Mac can say which
+/// services it sent a play to and another ThUNER can send it to the ones it has that aren't on the list.
+public enum ScrobbleDestination {
+    public static func lastFM(user: String) -> String { "last.fm/" + user.lowercased() }
+
+    /// A ListenBrainz-style server: its API address without the scheme, plus the user if known.
+    public static func server(_ apiBase: URL, user: String?) -> String {
+        var place = (apiBase.host ?? "") + apiBase.path
+        while place.hasSuffix("/") { place.removeLast() }
+        if let user, !user.isEmpty { place += "/" + user }
+        return place.lowercased()
+    }
+}

@@ -104,6 +104,7 @@ actor ListenBrainzService: ScrobbleService {
 
     var displayName: String { config.name }
     var isConnected: Bool { config.enabled && token != nil && config.apiBase != nil }
+    var destination: String? { config.apiBase.map { ScrobbleDestination.server($0, user: config.username) } }
     var pendingCount: Int { queue.items.count }
 
     private var token: String? { Keychain.read(String.self, account: Self.tokenAccount(config.id)) }

@@ -1865,9 +1865,16 @@ final class AppModel {
     private func handleScrobble(_ action: ScrobbleTracker.Action, at now: Date) {
         if case .nowPlaying = action { missedScrobble = nil }
         // Radio mode: plays still go in the history, but nothing goes to the services, not even now playing.
-        guard !radioMode else { return }
+        guard !radioMode else {
+            if case .scrobble(let track, let startedAt) = action { announceScrobble(track, startedAt: startedAt, to: [], paused: true) }
+            return
+        }
         guard scrobblingEnabled, hasScrobbleService else {
-            if case .scrobble = action { missedScrobble = action }
+            if case .scrobble(let track, let startedAt) = action {
+                missedScrobble = action
+                // Not set up here: the other Macs can send it to theirs.
+                announceScrobble(track, startedAt: startedAt, to: [])
+            }
             return
         }
         // The secondary Mac's mic can hear the turntable, so it stays quiet while the turntable Mac is active.
@@ -1892,35 +1899,74 @@ final class AppModel {
                 await refreshLastFMStatus()
             }
         case .scrobble(let track, let startedAt):
-            let entryID = history.entry(for: track, startedAt: startedAt)?.id
             Task {
-                var sentTo: [String] = []
-                for service in await activeScrobbleServices() {
-                    let name = await service.displayName
-                    if history.alreadyScrobbled(track, startedAt: startedAt, service: service.id) {
-                        note("Not scrobbling \(track.displayName) to \(name): already sent this play")
-                        continue
-                    }
-                    if skipDuplicateScrobbles,
-                       let recent = try? await service.recentScrobbles(from: startedAt.addingTimeInterval(-1800), to: Date().addingTimeInterval(60)),
-                       let duplicate = RemoteScrobble.duplicate(of: track, startedAt: startedAt, in: recent) {
-                        let time = duplicate.date.formatted(date: .omitted, time: .shortened)
-                        note("Not scrobbling \(track.displayName) to \(name): already there at \(time)")
-                        setScrobble(.skippedDuplicate("Already on \(name) at \(time)"), service: service.id, entryID)
-                        continue
-                    }
-                    do {
-                        try await service.scrobble(track, startedAt: startedAt)
-                        setScrobble(.scrobbled, service: service.id, entryID)
-                        sentTo.append(name)
-                    } catch {
-                        setScrobble(.queued, service: service.id, entryID)
-                        note("\(name): scrobble queued for later (\(error.localizedDescription))")
-                    }
-                }
-                if !sentTo.isEmpty { note("Scrobbled \(track.displayName) to \(sentTo.joined(separator: ", "))") }
-                await refreshLastFMStatus()
+                let has = await scrobble(track, startedAt: startedAt, to: await activeScrobbleServices())
+                announceScrobble(track, startedAt: startedAt, to: has)
             }
+        }
+    }
+
+    /// Sends a play to these services, skipping any that already have it, and records what happened in the
+    /// history. Returns the destinations that have it now (sent, queued or already there).
+    @discardableResult
+    private func scrobble(_ track: Track, startedAt: Date, to services: [any ScrobbleService],
+                          for host: String? = nil) async -> [String] {
+        let entryID = history.entry(for: track, startedAt: startedAt)?.id
+        var sentTo: [String] = []
+        var has: [String] = []
+        for service in services {
+            let name = await service.displayName
+            if let destination = await service.destination { has.append(destination) }
+            if history.alreadyScrobbled(track, startedAt: startedAt, service: service.id) {
+                note("Not scrobbling \(track.displayName) to \(name): already sent this play")
+                continue
+            }
+            if skipDuplicateScrobbles,
+               let recent = try? await service.recentScrobbles(from: startedAt.addingTimeInterval(-1800), to: Date().addingTimeInterval(60)),
+               let duplicate = RemoteScrobble.duplicate(of: track, startedAt: startedAt, in: recent) {
+                let time = duplicate.date.formatted(date: .omitted, time: .shortened)
+                note("Not scrobbling \(track.displayName) to \(name): already there at \(time)")
+                setScrobble(.skippedDuplicate("Already on \(name) at \(time)"), service: service.id, entryID)
+                continue
+            }
+            do {
+                try await service.scrobble(track, startedAt: startedAt)
+                setScrobble(.scrobbled, service: service.id, entryID)
+                sentTo.append(name)
+            } catch {
+                setScrobble(.queued, service: service.id, entryID)
+                note("\(name): scrobble queued for later (\(error.localizedDescription))")
+            }
+        }
+        if !sentTo.isEmpty {
+            note("Scrobbled \(track.displayName) to \(sentTo.joined(separator: ", "))\(host.map { " for \($0)" } ?? "")")
+        }
+        await refreshLastFMStatus()
+        return has
+    }
+
+    /// The turntable Mac tells the others where each play went, so they can send it to services it doesn't have.
+    private func announceScrobble(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool = false) {
+        guard role == .primary else { return }
+        peers.sendScrobbled(track, startedAt: startedAt, to: destinations, paused: paused, role: role.rawValue)
+    }
+
+    /// The turntable Mac scrobbled a play: send it to this Mac's services it didn't, so a service set up on only
+    /// one Mac still gets the records. Nothing while scrobbling is paused on either Mac.
+    private func relayScrobble(_ track: Track, startedAt: Date, from host: String, skipping destinations: [String],
+                               paused: Bool) {
+        let before = history
+        history.record(track, startedAt: startedAt, source: .anotherMac, host: host)
+        if history != before { saveHistory() }
+        guard !paused, !radioMode, scrobblingEnabled, hasScrobbleService else { return }
+        Task {
+            var missing: [any ScrobbleService] = []
+            for service in await activeScrobbleServices() {
+                if let destination = await service.destination, destinations.contains(destination) { continue }
+                missing.append(service)
+            }
+            guard !missing.isEmpty else { return }
+            await scrobble(track, startedAt: startedAt, to: missing, for: host)
         }
     }
 
@@ -2115,6 +2161,11 @@ final class AppModel {
             }
             if !hadControl, peerHasControl { note("\(message.host) is playing; pausing here") }
             if message.event == .push { note("\(message.host) is showing \(message.track ?? "a track")") }
+        case .scrobbled:
+            if let track = message.nowPlaying, let startedAt = message.startedAt {
+                relayScrobble(track, startedAt: startedAt, from: message.host, skipping: message.scrobbledTo ?? [],
+                              paused: message.scrobblingPaused == true)
+            }
         }
         updateCapture()
     }
