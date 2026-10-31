@@ -21,7 +21,10 @@ public final class RawPlayout: Playout, @unchecked Sendable {
     private var lastArrival = 0.0
     private var packetFrames = 128
 
-    /// Drift tracking: the running average fill, checked against where it should sit a few times a second.
+    /// Drift tracking: the running average fill, checked against where it should sit 20 times a second. Each check
+    /// can move one frame, so it keeps up with clocks up to 20 frames a second apart: ~400 ppm at 48 kHz, ~200 at
+    /// 96 kHz. (At 4 checks a second, two interfaces 92 ppm apart outran it and the buffer drained until it ran dry.)
+    private let checksPerSecond = 20.0
     private let tolerance = 12.0
     private let rampLength = 16
     private var fillAverage = 0.0
@@ -197,11 +200,13 @@ public final class RawPlayout: Playout, @unchecked Sendable {
     private func trackDrift(fill: Double, center: Double, frames: Int) {
         fillAverage += (fill - fillAverage) * min(Double(frames) / (0.5 * sampleRate), 1)
         framesSinceCheck += frames
-        if framesSinceCheck >= Int(sampleRate / 4), rampRemaining == 0, skipRemaining == 0 {
+        // `frames` are the output's, so time the checks on its rate.
+        if framesSinceCheck >= Int((outputRate > 0 ? outputRate : sampleRate) / checksPerSecond), rampRemaining == 0,
+           skipRemaining == 0 {
             framesSinceCheck = 0
             let deviation = fillAverage - center
             if deviation > skipThreshold {
-                // Not drift (that's a frame or two a second): catch up in one go rather than a frame at a time.
+                // Not drift (that's a few frames a second): catch up in one go rather than a frame at a time.
                 skipOffset = Int(deviation.rounded(.down))
                 skipRemaining = skipLength
                 fillAverage -= Double(skipOffset)
@@ -218,7 +223,8 @@ public final class RawPlayout: Playout, @unchecked Sendable {
         }
         local.bufferedFrames = fillAverage
         local.targetFrames = center
-        if framesPlayed > 0 { local.driftPPM = Double(netAdjustment) / Double(framesPlayed) * 1_000_000 }
+        // Adjustments are in stream frames, `framesPlayed` in the output's.
+        if framesPlayed > 0 { local.driftPPM = Double(netAdjustment) / (Double(framesPlayed) * step) * 1_000_000 }
     }
 
     private func silence(_ left: UnsafeMutablePointer<Float>, _ right: UnsafeMutablePointer<Float>, from: Int, to: Int) {

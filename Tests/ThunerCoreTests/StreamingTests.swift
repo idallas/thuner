@@ -213,6 +213,19 @@ struct SplitMix {
         #expect(abs(result.stats.bufferedFrames - result.stats.targetFrames) < 20)
     }
 
+    /// Two interfaces' clocks can be ~100 ppm apart (echo's M4 and trithena's Apollo were 92 on 2026-10-30), and a
+    /// frame is shorter at higher rates, so the frames a second to correct grow with both.
+    @Test(arguments: [(48_000.0, nil), (48_000.0, 44_100.0), (96_000.0, nil)] as [(Double, Double?)],
+          [-200.0, -95.0, 95.0, 200.0])
+    func followsLargeClockDriftAtAnyRate(rates: (Double, Double?), ppm: Double) {
+        let (rate, output) = rates
+        let sim = StreamSimulation(senderRate: rate, outputRate: output, driftPPM: ppm, seconds: 300)
+        let result = sim.run(RawPlayout(targetFrames: Int(rate * 0.003), outputRate: output ?? 0))
+        #expect(result.stats.underruns == 0)
+        #expect(abs(result.stats.bufferedFrames - result.stats.targetFrames) < 20, "\(result.stats)")
+        #expect(abs(result.stats.driftPPM - ppm) < 10, "measured \(result.stats.driftPPM) ppm")
+    }
+
     @Test func ridesJitterShorterThanAPacket() {
         // 2 ms: less than a packet, so nothing arrives out of order.
         let result = StreamSimulation(driftPPM: 30, jitter: 0.002, seconds: 30).run(RawPlayout(targetFrames: 128))
