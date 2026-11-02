@@ -36,7 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppWindows.shared.model = model
         let panel = PanelController(model: model)
         self.panel = panel
-        AppWindows.shared.pulseMenuBarIcon = { [weak panel] in panel?.pulseIcon() }
         AppWindows.shared.openPanel = { [weak panel] in panel?.openPanel() }
         if !model.onboardingComplete { AppWindows.shared.show(.welcome) }
         // `open Thuner.app --args -openSettingsPane streaming`: straight to a settings tab (for checking UI, or a

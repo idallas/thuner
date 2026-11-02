@@ -6,8 +6,8 @@ import ThunerCore
 /// of macOS prompts arriving out of nowhere at launch.
 struct OnboardingView: View {
     @Bindable var model: AppModel
-    /// Point at the menu bar icon (it pulses).
-    var showIcon: () -> Void = {}
+    /// Open the panel under the menu bar icon, to show where ThUNER lives.
+    var showPanel: () -> Void = {}
     /// Close the tour and open the panel.
     var finish: () -> Void = {}
 
@@ -56,7 +56,7 @@ struct OnboardingView: View {
             HStack(spacing: 8) {
                 Text("ThUNER lives in your menu bar:")
                 Image(nsImage: MenuBarIcon.image(.playing))
-                Button("Show Me") { showIcon() }.controlSize(.small)
+                Button("Show Me") { showPanel() }.controlSize(.small)
             }
             .padding(.top, 8)
         }
@@ -145,10 +145,9 @@ struct OnboardingView: View {
 
     private var scrobbling: some View {
         VStack(alignment: .leading, spacing: 14) {
-            title("Scrobbling", "Optional: keep a record of what you play on Last.fm.")
+            title("Scrobbling", "Optional: keep a record of what you play on Last.fm, ListenBrainz, or a server of your own like Maloja or Koito.")
             if let user = model.lastFMUser {
                 Label("Connected to Last.fm as \(user)", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                Toggle("Scrobble from this Mac", isOn: $model.scrobblingEnabled)
             } else if model.lastFMAwaitingApproval {
                 Text("Approve ThUNER on the Last.fm page that opened in your browser, then come back.")
                 HStack {
@@ -167,7 +166,16 @@ struct OnboardingView: View {
                     .controlSize(.large).buttonStyle(.borderedProminent)
             }
             if let error = model.lastFMError { Text(error).font(.caption).foregroundStyle(.red) }
-            Text("ListenBrainz, Maloja, Koito and other self-hosted services can be added later in Settings → Scrobbling. The Scrobble button in the menu pauses scrobbling whenever you like, and covers keep showing.")
+            ForEach(model.listenBrainzConfigs.filter(\.enabled), id: \.id) { config in
+                Label("Sending to \(config.name)", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            }
+            Button(model.listenBrainzConfigs.isEmpty ? "Add ListenBrainz, Maloja, Koito…" : "Add Another Service…") {
+                AppWindows.shared.showSettings(.scrobbling)
+            }
+            if model.lastFMUser != nil || !model.listenBrainzConfigs.isEmpty {
+                Toggle("Scrobble from this Mac", isOn: $model.scrobblingEnabled)
+            }
+            Text("The Scrobble button in the menu pauses scrobbling whenever you like, and covers keep showing.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }

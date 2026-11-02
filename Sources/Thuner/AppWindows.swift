@@ -11,8 +11,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
 
     static let shared = AppWindows()
     var model: AppModel?
-    /// Set by AppDelegate: point at the menu bar icon, and open the panel (used by the tour).
-    var pulseMenuBarIcon: () -> Void = {}
+    /// Set by AppDelegate: open the panel under the menu bar icon (used by the tour).
     var openPanel: () -> Void = {}
     private var windows: [Kind: NSWindow] = [:]
 
@@ -70,7 +69,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 620, height: 760))
         case .welcome:
-            let tour = OnboardingView(model: model, showIcon: { [weak self] in self?.pulseMenuBarIcon() }, finish: { [weak self] in
+            let tour = OnboardingView(model: model, showPanel: { [weak self] in self?.openPanel() }, finish: { [weak self] in
                 self?.windows[.welcome]?.close()
                 self?.openPanel()
             })

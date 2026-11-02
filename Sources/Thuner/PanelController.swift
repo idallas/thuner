@@ -98,14 +98,6 @@ final class PanelController: NSObject, NSWindowDelegate {
         if !panel.isVisible { showUnderIcon() }
     }
 
-    /// Flashes the menu bar icon a few times, to point out where ThUNER lives.
-    func pulseIcon() {
-        guard let button = statusItem.button else { return }
-        for i in 0..<6 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.22) { button.highlight(i % 2 == 0) }
-        }
-    }
-
     // MARK: Showing and hiding
 
     private var iconFrame: NSRect? { statusItem.button?.window?.frame }
