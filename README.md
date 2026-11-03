@@ -1,6 +1,6 @@
 # ThUNER
 
-A macOS menu bar app that knows what's playing (from a turntable, the room, a browser, Apple Music or Spotify), shows the cover on a [Tuneshine](https://tuneshine.rocks) or any screen, and scrobbles it to Last.fm or a self-hosted service.
+A Swiss army knife for what's playing on a Mac. It's a menu bar app that takes the track from wherever the music comes from (a turntable, the room, Apple Music, Spotify, a browser or any app) and sends it wherever you want it: the cover to a [Tuneshine](https://tuneshine.rocks) or any screen, the play to Last.fm or a self-hosted service, what's playing to Shortcuts and your own scripts, and the audio itself to another Mac's speakers.
 
 ![The ThUNER menu bar panel](docs/menu.png)
 
@@ -16,7 +16,8 @@ A macOS menu bar app that knows what's playing (from a turntable, the room, a br
   - on a Tuneshine, found on the network, by uploading a 64×64 WebP to its local API
   - in a floating window or a pinnable panel
   - on a web display any browser can open
-- **Two Macs, one display.** The turntable Mac has priority, coordinated over Bonjour and UDP. While the turntable plays, the other Mac pauses its mic and shows the turntable's track.
+- **Two Macs, one display.** Tell one Mac to defer to another (Settings → General), coordinated over Bonjour and UDP. While the turntable Mac plays, the desk Mac keeps its mic off and shows the turntable's track.
+- **Streams the audio.** One ThUNER shares its input and another plays it, so the turntable in one room comes out of the speakers in another: uncompressed, a few milliseconds of buffer on Ethernet, resilient to loss on Wi-Fi, optionally encrypted.
 - **Scrobbles:**
   - to Last.fm, with an offline queue and duplicate detection
   - to ListenBrainz-compatible servers (ListenBrainz, Maloja, Koito, multi-scrobbler)

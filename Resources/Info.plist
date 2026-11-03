@@ -32,7 +32,7 @@
 		<string>_thuner._udp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ThUNER finds and updates your Tuneshine, and coordinates with ThUNER on your other Macs so the turntable Mac gets the display first.</string>
+	<string>ThUNER finds and updates your Tuneshine, and talks to ThUNER on your other Macs to share what's playing, defer to one of them and stream audio between them.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ThUNER listens to the turntable or room audio to identify what's playing.</string>
 	<key>SUAutomaticallyUpdate</key>

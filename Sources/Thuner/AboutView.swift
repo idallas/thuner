@@ -17,7 +17,7 @@ struct AboutView: View {
                     .textSelection(.enabled)
             }
 
-            Text("Knows what's playing, from the turntable or anywhere else, and puts the cover on your Tuneshine.")
+            Text("A Swiss army knife for what's playing: takes the track from a turntable, the room, Apple Music, Spotify, a browser or any app, and sends it to a Tuneshine, any screen, Last.fm or the speakers in the next room.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

@@ -49,9 +49,9 @@ struct OnboardingView: View {
         VStack(spacing: 18) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 112, height: 112)
             Wordmark().font(.system(size: 34))
-            Text("Knows what's playing, from the turntable or anywhere else, and puts the cover on your Tuneshine.")
+            Text("A Swiss army knife for what's playing: takes the track from a turntable, the room, Apple Music, Spotify, a browser or any app, and sends it to a Tuneshine, any screen, Last.fm or the speakers in the next room.")
                 .font(.title3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            Text("It listens to an input with Shazam, or reads Apple Music and Spotify directly, then shows the cover and scrobbles the play.")
+            Text("It listens to an input with Shazam, or reads Apple Music, Spotify, websites and other apps directly, then shows the cover, scrobbles the play and can stream the sound to another Mac.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Text("ThUNER lives in your menu bar:")
