@@ -35,23 +35,27 @@ public struct WebScrobblerEvent: Equatable, Sendable {
         public var name: String
         public var bundleIDs: [String]
 
+        // Most specific first: Edge and Opera also say Chrome, and Chrome says Safari.
+        private static let families: [(token: String, name: String, bundleIDs: [String])] = [
+            ("Edg/", "Edge", ["com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev"]),
+            ("OPR/", "Opera", ["com.operasoftware.Opera", "com.operasoftware.OperaGX"]),
+            ("Vivaldi/", "Vivaldi", ["com.vivaldi.Vivaldi"]),
+            ("Firefox/", "Firefox", ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly",
+                                     "app.zen-browser.zen", "io.gitlab.librewolf-community", "net.waterfox.waterfox"]),
+            ("Chrome/", "Chrome", ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
+                                   "com.brave.Browser", "company.thebrowser.Browser", "com.vivaldi.Vivaldi",
+                                   "org.chromium.Chromium", "com.microsoft.edgemac", "com.operasoftware.Opera"]),
+            ("Safari/", "Safari", ["com.apple.Safari", "com.apple.SafariTechnologyPreview"]),
+        ]
+
         public init?(userAgent: String) {
-            // Most specific first: Edge and Opera also say Chrome, and Chrome says Safari.
-            let families: [(token: String, name: String, bundleIDs: [String])] = [
-                ("Edg/", "Edge", ["com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev"]),
-                ("OPR/", "Opera", ["com.operasoftware.Opera", "com.operasoftware.OperaGX"]),
-                ("Vivaldi/", "Vivaldi", ["com.vivaldi.Vivaldi"]),
-                ("Firefox/", "Firefox", ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly",
-                                         "app.zen-browser.zen", "io.gitlab.librewolf-community", "net.waterfox.waterfox"]),
-                ("Chrome/", "Chrome", ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
-                                       "com.brave.Browser", "company.thebrowser.Browser", "com.vivaldi.Vivaldi",
-                                       "org.chromium.Chromium", "com.microsoft.edgemac", "com.operasoftware.Opera"]),
-                ("Safari/", "Safari", ["com.apple.Safari", "com.apple.SafariTechnologyPreview"]),
-            ]
-            guard let family = families.first(where: { userAgent.contains($0.token) }) else { return nil }
+            guard let family = Self.families.first(where: { userAgent.contains($0.token) }) else { return nil }
             name = family.name
             bundleIDs = family.bundleIDs
         }
+
+        /// Every browser app ThUNER knows of.
+        public static var allBundleIDs: Set<String> { Set(families.flatMap(\.bundleIDs)) }
     }
 
     public init(kind: Kind, track: Track, site: String, siteArtwork: URL? = nil, pageURL: URL? = nil,

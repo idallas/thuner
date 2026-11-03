@@ -96,7 +96,7 @@ final class PlayerMonitor {
     func receivedNowPlaying(_ report: NowPlayingHelper.Report) {
         let app = report.pid.flatMap { AudioDevices.owningApp(of: $0) }
         let skipped: Set<String> = ["com.apple.Music", "com.spotify.client", Bundle.main.bundleIdentifier ?? "com.idallas.thuner"]
-        guard let title = report.title, let artist = report.artist.map(WebScrobblerEvent.withoutTopic), !artist.isEmpty,
+        guard let title = report.title, let reported = report.artist.map(WebScrobblerEvent.withoutTopic), !reported.isEmpty,
               !(app.map { skipped.contains($0.bundleID) } ?? false) else {
             // Nothing (or nothing of ours) playing: end whatever Now Playing had going.
             if let current = latest[.nowPlaying], current.isPlaying {
@@ -105,7 +105,13 @@ final class PlayerMonitor {
             }
             return
         }
-        var track = Track(title: title, artist: artist, album: report.album)
+        var artist = reported, album = report.album
+        // Some players (VOX) put "Artist — Album" in the artist field and leave the album empty.
+        if album == nil, let range = artist.range(of: " — ") {
+            album = String(artist[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            artist = String(artist[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        var track = Track(title: title, artist: artist, album: album?.isEmpty == false ? album : nil)
         if let duration = report.duration, duration > 0 { track.duration = duration }
         if let artwork = report.artwork { nowPlayingArtwork = Data(base64Encoded: artwork) }
         update(.nowPlaying, track: track, playing: report.playing, position: report.position,
@@ -173,9 +179,11 @@ final class PlayerMonitor {
         log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
         return Task {
             let found = await artwork.find(for: track)
-            // Now Playing also reports videos, talks and trailers (the "artist" is the channel): only follow what
-            // looks like music, a track with an album or one Apple's catalogue knows.
-            if source == .nowPlaying, track.album == nil, found.appleMusicID == nil {
+            // Browsers also report videos, talks and trailers through Now Playing (the "artist" is the channel): from
+            // a browser, only follow what looks like music, a track with an album or one Apple's catalogue knows.
+            // Music apps (VOX, VLC with an artist) count whatever they play.
+            if source == .nowPlaying, appBundleID.map(WebScrobblerEvent.Browser.allBundleIDs.contains) ?? true,
+               track.album == nil, found.appleMusicID == nil {
                 log.notice("\(site ?? source.rawValue, privacy: .public): \(track.displayName, privacy: .public) doesn't look like music; ignoring it")
                 if let current = latest[source], current.isPlaying {
                     var stopped = current
