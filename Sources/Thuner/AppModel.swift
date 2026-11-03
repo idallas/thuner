@@ -328,6 +328,14 @@ final class AppModel {
     var useSpotify: Bool { didSet { save(useSpotify, "useSpotify"); playerChanged() } }
     /// Follow websites through the Web Scrobbler browser extension (its Webhook pointed at `webScrobblerURL`).
     var useWebScrobbler: Bool { didSet { save(useWebScrobbler, "useWebScrobbler"); playerChanged() } }
+    /// Follow anything else macOS shows as playing (other apps, browsers) through NowPlayingHelper.
+    var useNowPlaying: Bool {
+        didSet {
+            save(useNowPlaying, "useNowPlaying")
+            if useNowPlaying { nowPlaying.start() } else { nowPlaying.stop() }
+            playerChanged()
+        }
+    }
     /// When a player stops, keep the mic off until asked (Listen in the panel) instead of turning it on.
     var askBeforeMicAfterPlayer: Bool {
         didSet {
@@ -453,7 +461,7 @@ final class AppModel {
             showPlaybackProblem(text)
             return text
         case .notAllowed:
-            let text = player.source == .browser
+            let text = player.source == .browser || player.source == .nowPlaying
                 ? "Allow ThUNER to press media keys for \(name): System Settings → Privacy & Security → Accessibility"
                 : "Allow ThUNER to control \(name): System Settings → Privacy & Security → Automation"
             showPlaybackProblem(text)
@@ -868,6 +876,7 @@ final class AppModel {
     private var ticker: Timer?
     @ObservationIgnored private var floatingCover: FloatingCoverController?
     private let players = PlayerMonitor()
+    private let nowPlaying = NowPlayingHelper()
     /// Set when something outside the Shazam state machine left a cover up (a player stopped, or the cover
     /// restored at launch): clear it after the same silence delay as Shazam unless something takes over.
     private var clearAfterQuietSince: Date?
@@ -971,6 +980,7 @@ final class AppModel {
         useAppleMusic = d.object(forKey: "useAppleMusic") as? Bool ?? true
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
         useWebScrobbler = d.object(forKey: "useWebScrobbler") as? Bool ?? true
+        useNowPlaying = d.object(forKey: "useNowPlaying") as? Bool ?? true
         askBeforeMicAfterPlayer = d.object(forKey: "askBeforeMicAfterPlayer") as? Bool ?? true
         gate = LevelGate(thresholdDB: d.string(forKey: "inputDeviceUID") == SystemAudioTap.uid ? Self.systemAudioThresholdDB : threshold)
         arbiter = PushArbiter(role: role)
@@ -1033,12 +1043,16 @@ final class AppModel {
 
         players.onChange = { [weak self] _ in self?.playerChanged() }
         players.playerArtwork = { [weak self] source in
-            guard let data = await PlayerControl.currentArtwork(source),
+            let data = source == .nowPlaying ? self?.players.nowPlayingArtwork : await PlayerControl.currentArtwork(source)
+            guard let data,
                   let name = await Task.detached(operation: { LocalArtwork.save(data) }).value else { return nil }
             self?.logger.notice("Cover from \(source.rawValue, privacy: .public) itself (not in Apple's catalogue search)")
             return self?.localArtworkURL(name)
         }
         players.start()
+        nowPlaying.onReport = { [weak self] report in self?.players.receivedNowPlaying(report) }
+        PlayerControl.remote = { [weak self] command in self?.nowPlaying.send(command) ?? false }
+        if useNowPlaying { nowPlaying.start() }
 
         tuneshineBrowser.onChange = { [weak self] in
             guard let self else { return }
@@ -1529,6 +1543,7 @@ final class AppModel {
                 case .appleMusic: .appleMusic
                 case .spotify: .spotify
                 case .browser: .browser
+                case .nowPlaying: .nowPlaying
                 case nil: .shazam
                 }
                 history.record(track, startedAt: play.startedAt, source: source, host: activePlayer?.site)
@@ -1705,6 +1720,7 @@ final class AppModel {
         case .appleMusic: useAppleMusic
         case .spotify: useSpotify
         case .browser: useWebScrobbler
+        case .nowPlaying: useNowPlaying
         }
     }
 
@@ -1713,7 +1729,12 @@ final class AppModel {
         let enabled = players.latest.values.filter {
             $0.isPlaying && follows($0.source)
         }
-        let playing = enabled.max { $0.receivedAt < $1.receivedAt }
+        var playing = enabled.max { $0.receivedAt < $1.receivedAt }
+        // The same song from Web Scrobbler and Now Playing: Web Scrobbler knows the site and cleans up the names.
+        if let p = playing, p.source == .nowPlaying,
+           let site = enabled.first(where: { $0.source == .browser && $0.track.isSameSong(as: p.track) }) {
+            playing = site
+        }
         let previous = activePlayer
         let wasActive = previous != nil
         activePlayer = playing

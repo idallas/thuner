@@ -52,10 +52,11 @@ struct SettingsView: View {
                     Section {
                         Toggle("Apple Music", isOn: $model.useAppleMusic)
                         Toggle("Spotify", isOn: $model.useSpotify)
+                        Toggle("Other apps and websites (Now Playing)", isOn: $model.useNowPlaying)
                     } header: {
                         Text("Follow players on this Mac")
                     } footer: {
-                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause.")
+                        Text("While one of these plays, ThUNER takes the track from it instead of listening. It notices a player at its next track change or play/pause. Now Playing is what Control Center shows: browsers (YouTube Music, Bandcamp, SoundCloud…) and other apps; only tracks with an album or in Apple's catalogue count, so videos don't.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {

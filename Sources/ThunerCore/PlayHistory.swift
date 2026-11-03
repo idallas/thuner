@@ -11,6 +11,8 @@ public struct PlayHistory: Codable, Equatable, Sendable {
         case anotherMac = "Another Mac"
         /// A website, through the Web Scrobbler browser extension. `Entry.host` says which site.
         case browser = "Browser"
+        /// Another app (or a browser) through macOS's Now Playing. `Entry.host` says which app.
+        case nowPlaying = "Now Playing"
 
         /// How much to trust a report of what's playing: a player knows; the turntable Mac heard the record
         /// itself; Shazam here may have heard it through the speakers.
@@ -18,7 +20,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
             switch self {
             case .shazam: 0
             case .anotherMac: 1
-            case .appleMusic, .spotify, .browser: 2
+            case .appleMusic, .spotify, .browser, .nowPlaying: 2
             }
         }
     }
@@ -38,7 +40,7 @@ public struct PlayHistory: Codable, Equatable, Sendable {
         public var track: Track
         public var startedAt: Date
         public var source: Source
-        /// For `.anotherMac`: its name. For `.browser`: the site.
+        /// For `.anotherMac`: its name. For `.browser`: the site. For `.nowPlaying`: the app.
         public var host: String?
         /// What happened at each scrobbling service, keyed by service id ("lastfm", or a ListenBrainz-style
         /// service's UUID).
@@ -55,7 +57,9 @@ public struct PlayHistory: Codable, Equatable, Sendable {
         }
 
         /// Where it was played, for display: the app, Shazam, the other Mac's name or the website.
-        public var sourceName: String { source == .anotherMac || source == .browser ? host ?? source.rawValue : source.rawValue }
+        public var sourceName: String {
+            [.anotherMac, .browser, .nowPlaying].contains(source) ? host ?? source.rawValue : source.rawValue
+        }
 
         /// One status for the whole play: scrobbled if any service took it, else queued, else a duplicate.
         public var scrobble: ScrobbleStatus {

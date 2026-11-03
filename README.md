@@ -11,6 +11,7 @@ A macOS menu bar app that knows what's playing (from a turntable, the room, a br
 - **Listens carefully.** It identifies a line-in, a microphone or the Mac's own audio (a Core Audio process tap, which can be limited to certain apps) with ShazamKit. It waits for two results that agree before changing anything. It stays quiet below an adjustable silence threshold, and checks each confirmed track again near its predicted end.
 - **Reads players directly.** It takes Apple Music and Spotify tracks from the apps' own notifications, with no permissions needed, and turns the mic off while they play.
 - **Follows websites.** Point the [Web Scrobbler](https://web-scrobbler.com) browser extension's Webhook at ThUNER (Settings → General copies the URL) and YouTube Music, Bandcamp, SoundCloud and the rest count as a player too: cover on the Tuneshine, scrobbled by ThUNER.
+- **Follows other apps and browsers.** Anything that shows up in Control Center's Now Playing (VLC, a browser tab playing YouTube Music, Bandcamp and so on) is followed too, with no setup; videos are left out.
 - **Shows the cover:**
   - on a Tuneshine, found on the network, by uploading a 64×64 WebP to its local API
   - in a floating window or a pinnable panel

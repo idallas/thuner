@@ -108,7 +108,7 @@ public struct WebScrobblerEvent: Equatable, Sendable {
     }
 
     /// YouTube's auto-generated channels are named "Artist - Topic", and Web Scrobbler doesn't always drop that.
-    static func withoutTopic(_ artist: String) -> String {
+    public static func withoutTopic(_ artist: String) -> String {
         guard artist.hasSuffix(" - Topic") else { return artist }
         return String(artist.dropLast(" - Topic".count)).trimmingCharacters(in: .whitespaces)
     }

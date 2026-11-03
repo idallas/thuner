@@ -163,6 +163,7 @@ struct HistoryView: View {
         case .spotify: "dot.radiowaves.left.and.right"
         case .anotherMac: "opticaldisc"
         case .browser: "globe"
+        case .nowPlaying: "play.rectangle"
         }
     }
 }

@@ -82,6 +82,9 @@ appintents_metadata() {  # <module> <output folder>
 appintents_metadata Thuner "$APP/Contents/Resources"
 # ditto keeps the framework's symlinks intact.
 ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+# The Now Playing helper: loaded by Apple's /usr/bin/perl, not by ThUNER (see Helpers/NowPlaying).
+clang -dynamiclib -arch arm64 -arch x86_64 -mmacosx-version-min=15.0 -fobjc-arc -O2 -framework Foundation \
+  Helpers/NowPlaying/ThunerNowPlaying.m -o "$APP/Contents/Frameworks/libThunerNowPlaying.dylib"
 
 # The widget: a WidgetKit extension, versioned like the app, with its ID under the app's.
 WIDGET="$APP/Contents/PlugIns/ThunerWidget.appex"
@@ -115,6 +118,7 @@ sign --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloade
 sign "$SPARKLE/Versions/B/Autoupdate"
 sign "$SPARKLE/Versions/B/Updater.app"
 sign "$SPARKLE"
+sign "$APP/Contents/Frameworks/libThunerNowPlaying.dylib"
 # Widget extensions must be sandboxed; it only needs to reach ThUNER's own http://127.0.0.1:47480.
 sign --entitlements Resources/ThunerWidget.entitlements "$WIDGET"
 sign --entitlements Resources/Thuner.entitlements "$APP"

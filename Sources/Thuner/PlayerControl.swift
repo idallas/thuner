@@ -6,9 +6,9 @@ import os
 /// needs no permission (PlayerMonitor listens to their notifications); controlling the apps is AppleScript, which
 /// macOS asks about (Privacy & Security → Automation) the first time a control is used, never before.
 ///
-/// A browser tab can't be scripted, so for a website ThUNER presses the keyboard's media keys: browsers answer them
-/// (macOS sends them to whatever it thinks is playing). Faking a key press needs Accessibility permission, again
-/// asked the first time, never before.
+/// A browser tab or another app can't be scripted, so for those ThUNER asks macOS's Now Playing to play/pause or skip
+/// whatever it shows as playing (`remote`, through NowPlayingHelper). Without the helper it presses the keyboard's
+/// media keys instead, which go to the same place but need Accessibility permission, asked the first time.
 enum PlayerControl {
     enum Command: String, Sendable {
         case playPause, next, previous
@@ -40,12 +40,15 @@ enum PlayerControl {
         case failed(String)
     }
 
-    /// The app to script; nil for a website (media keys instead).
+    /// Sends a command through macOS's Now Playing (set by AppModel); false when that isn't available.
+    @MainActor static var remote: ((Command) -> Bool)?
+
+    /// The app to script; nil for a website or another app (Now Playing or media keys instead).
     static func bundleID(_ source: PlayerMonitor.Source) -> String? {
         switch source {
         case .appleMusic: "com.apple.Music"
         case .spotify: "com.spotify.client"
-        case .browser: nil
+        case .browser, .nowPlaying: nil
         }
     }
 
@@ -57,8 +60,11 @@ enum PlayerControl {
     /// Whether there's something to control: the app is open, or for a website, its browser (if the webhook said
     /// which; otherwise assume so). With nothing open, the play key would start Apple Music instead.
     static func isRunning(_ player: PlayerMonitor.Snapshot) -> Bool {
-        guard player.source == .browser else { return isRunning(player.source) }
-        return player.browser.map { isRunning($0.bundleIDs) } ?? true
+        switch player.source {
+        case .appleMusic, .spotify: isRunning(player.source)
+        case .browser: player.browser.map { isRunning($0.bundleIDs) } ?? true
+        case .nowPlaying: player.appBundleID.map { isRunning([$0]) } ?? false
+        }
     }
 
     private static func isRunning(_ bundleIDs: [String]) -> Bool {
@@ -114,7 +120,7 @@ enum PlayerControl {
                 return {name of t, artist of t, album of t, duration of t, id of t, player position}
             end tell
             """
-        case .browser: ""
+        case .browser, .nowPlaying: ""
         }
         let result: NSAppleEventDescriptor? = await withCheckedContinuation { continuation in
             queue.async {
@@ -135,15 +141,19 @@ enum PlayerControl {
             if duration > 0 { info["Duration"] = duration }  // already ms
             if let id = list.atIndex(5)?.stringValue { info["Track ID"] = id }
             if let position = list.atIndex(6)?.doubleValue { info["Playback Position"] = position }
-        case .browser: break
+        case .browser, .nowPlaying: break
         }
         return info
     }
 
+    @MainActor
     static func send(_ command: Command, to player: PlayerMonitor.Snapshot) async -> Outcome {
         guard isRunning(player) else { return .notRunning }
         let source = player.source
-        guard let id = bundleID(source) else { return pressMediaKey(command) }
+        guard let id = bundleID(source) else {
+            if remote?(command) == true { return .done }
+            return pressMediaKey(command)
+        }
         let script = "tell application id \"\(id)\" to \(command.script)"
         return await withCheckedContinuation { continuation in
             queue.async {

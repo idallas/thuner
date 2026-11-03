@@ -15,6 +15,9 @@ final class PlayerMonitor {
         case spotify = "Spotify"
         /// A website, through Web Scrobbler. `Snapshot.site` says which.
         case browser = "Browser"
+        /// Any other app (or a browser) that tells macOS what it plays, through `NowPlayingHelper`.
+        /// `Snapshot.site` is the app's name.
+        case nowPlaying = "Now Playing"
     }
 
     struct Snapshot: Equatable {
@@ -28,6 +31,8 @@ final class PlayerMonitor {
         var site: String?
         /// For `.browser`: the browser it plays in, when Web Scrobbler's request said.
         var browser: WebScrobblerEvent.Browser?
+        /// For `.nowPlaying`: the app playing it.
+        var appBundleID: String?
 
         /// What to call it: the app, or the website.
         var name: String { site ?? source.rawValue }
@@ -83,6 +88,30 @@ final class PlayerMonitor {
         }
     }
 
+    /// The cover macOS's Now Playing had for the current track, if any (set before the update that uses it).
+    private(set) var nowPlayingArtwork: Data?
+
+    /// What macOS says is playing. Apple Music and Spotify are left out (followed directly, with more detail),
+    /// as is ThUNER itself.
+    func receivedNowPlaying(_ report: NowPlayingHelper.Report) {
+        let app = report.pid.flatMap { AudioDevices.owningApp(of: $0) }
+        let skipped: Set<String> = ["com.apple.Music", "com.spotify.client", Bundle.main.bundleIdentifier ?? "com.idallas.thuner"]
+        guard let title = report.title, let artist = report.artist.map(WebScrobblerEvent.withoutTopic), !artist.isEmpty,
+              !(app.map { skipped.contains($0.bundleID) } ?? false) else {
+            // Nothing (or nothing of ours) playing: end whatever Now Playing had going.
+            if let current = latest[.nowPlaying], current.isPlaying {
+                update(.nowPlaying, track: current.track, playing: false, position: nil, site: current.site,
+                       appBundleID: current.appBundleID)
+            }
+            return
+        }
+        var track = Track(title: title, artist: artist, album: report.album)
+        if let duration = report.duration, duration > 0 { track.duration = duration }
+        if let artwork = report.artwork { nowPlayingArtwork = Data(base64Encoded: artwork) }
+        update(.nowPlaying, track: track, playing: report.playing, position: report.position,
+               site: app?.name ?? "Now Playing", appBundleID: app?.bundleID)
+    }
+
     /// A website that went quiet without saying so (its tab closed, the browser quit): Web Scrobbler sends nothing
     /// then, so a play ends once the song should have finished, plus a little, or after 10 minutes without a length.
     func expireBrowser(at now: Date) {
@@ -127,7 +156,7 @@ final class PlayerMonitor {
     @discardableResult
     private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?,
                         site: String? = nil, siteArtwork: URL? = nil,
-                        browser: WebScrobblerEvent.Browser? = nil) -> Task<Void, Never>? {
+                        browser: WebScrobblerEvent.Browser? = nil, appBundleID: String? = nil) -> Task<Void, Never>? {
         guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
@@ -137,12 +166,25 @@ final class PlayerMonitor {
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
             t.duration = t.duration ?? previous.track.duration
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser))
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser,
+                          appBundleID: appBundleID))
             return nil
         }
         log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
         return Task {
             let found = await artwork.find(for: track)
+            // Now Playing also reports videos, talks and trailers (the "artist" is the channel): only follow what
+            // looks like music, a track with an album or one Apple's catalogue knows.
+            if source == .nowPlaying, track.album == nil, found.appleMusicID == nil {
+                log.notice("\(site ?? source.rawValue, privacy: .public): \(track.displayName, privacy: .public) doesn't look like music; ignoring it")
+                if let current = latest[source], current.isPlaying {
+                    var stopped = current
+                    stopped.isPlaying = false
+                    stopped.receivedAt = receivedAt
+                    emit(stopped)
+                }
+                return
+            }
             var t = track
             t.artworkURL = found.url
             if t.artworkURL == nil, let playerArtwork { t.artworkURL = await playerArtwork(source) }
@@ -151,7 +193,8 @@ final class PlayerMonitor {
             if t.artworkURL == nil { t.artworkURL = siteArtwork }
             t.appleMusicID = found.appleMusicID
             if t.duration == nil { t.duration = found.duration }
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser))
+            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser,
+                          appBundleID: appBundleID))
         }
     }
 
