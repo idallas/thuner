@@ -70,15 +70,21 @@ public struct Track: Equatable, Sendable, Codable {
     }
 
     static func normalize(_ s: String) -> String {
-        var s = s.lowercased()
-        // Drop "(Remastered 2011)", "[Live]", " - Single Version" style suffixes.
+        var s = withoutBrackets(s).lowercased()
+        if let dash = s.range(of: " - ") { s = String(s[..<dash.lowerBound]) }
+        return s.filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// The text without its bracketed parts: "Lean (feat. Saya Gray) [CLEAN]" → "Lean". For searching a catalogue
+    /// whose search chokes on tags like "[CLEAN]" and "(Radio Edit)" (matching already ignores them).
+    public static func withoutBrackets(_ text: String) -> String {
+        var s = text
         for (open, close) in [("(", ")"), ("[", "]")] {
             while let o = s.range(of: open), let c = s.range(of: close, range: o.upperBound..<s.endIndex) {
                 s.removeSubrange(o.lowerBound..<c.upperBound)
             }
         }
-        if let dash = s.range(of: " - ") { s = String(s[..<dash.lowerBound]) }
-        return s.filter { $0.isLetter || $0.isNumber }
+        return s.replacingOccurrences(of: "  ", with: " ").trimmingCharacters(in: .whitespaces)
     }
 }
 

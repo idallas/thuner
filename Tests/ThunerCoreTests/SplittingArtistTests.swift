@@ -17,3 +17,12 @@ struct SplittingArtistTests {
         #expect(Track(title: "x", artist: "Name - ").splittingArtist().isEmpty)
     }
 }
+
+struct WithoutBracketsTests {
+    @Test func dropsTagsAndCredits() {
+        #expect(Track.withoutBrackets("Lean (feat. Saya Gray) [CLEAN]") == "Lean")
+        #expect(Track.withoutBrackets("Flower In A Hurricane (feat. Tame Impala, SZA) (Radio Edit)") == "Flower In A Hurricane")
+        #expect(Track.withoutBrackets("Kerosene") == "Kerosene")
+        #expect(Track.withoutBrackets("Don't Stop (Color on the Walls)") == "Don't Stop")
+    }
+}

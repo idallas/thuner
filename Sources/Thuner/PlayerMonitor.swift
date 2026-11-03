@@ -197,6 +197,12 @@ final class PlayerMonitor {
                     found = other
                     break
                 }
+                // Nothing in the catalogue either way round: over AirPlay the "Song - Artist" order is the
+                // radio convention (KCRW), so show that rather than the show's name as the title.
+                if found.appleMusicID == nil, found.url == nil, appBundleID == Self.airPlayBundleID, let first = readings.first {
+                    log.notice("\(site ?? source.rawValue): reading it as \(first.displayName) (not in Apple's catalogue)")
+                    track = first
+                }
             }
             // Browsers also report videos, talks and trailers through Now Playing (the "artist" is the channel): from
             // a browser or AirPlay (a phone's podcast or video), only follow what looks like music, a track with an
@@ -268,9 +274,20 @@ actor ArtworkLookup {
     }
 
     private func itunesSearch(_ track: Track) async -> Found? {
+        // The title as reported first; a radio station's tags ("[CLEAN]", "(Radio Edit)", a long "(feat. …)")
+        // make Apple's search find nothing, so then the bare title.
+        let bare = Track.withoutBrackets(track.title)
+        var found = await itunesSearch(track, term: "\(track.artist) \(track.title)")
+        if found?.appleMusicID == nil, !bare.isEmpty, bare != track.title {
+            found = await itunesSearch(track, term: "\(track.artist) \(bare)") ?? found
+        }
+        return found
+    }
+
+    private func itunesSearch(_ track: Track, term: String) async -> Found? {
         var components = URLComponents(string: "https://itunes.apple.com/search")!
         components.queryItems = [
-            URLQueryItem(name: "term", value: "\(track.artist) \(track.title)"),
+            URLQueryItem(name: "term", value: term),
             URLQueryItem(name: "entity", value: "song"),
             URLQueryItem(name: "limit", value: "10"),
         ]
@@ -288,8 +305,10 @@ actor ArtworkLookup {
         guard let url = components.url,
               let (data, _) = try? await URLSession.shared.data(from: url),
               let response = try? JSONDecoder().decode(Response.self, from: data) else { return nil }
+        // Same title and an artist in common: Apple credits every artist ("Justice, Tame Impala, SZA & …") where
+        // a radio station or player names the first.
         let candidates = response.results.filter {
-            Track(title: $0.trackName ?? "", artist: $0.artistName ?? "").isSameSong(as: track)
+            track.isLikelySameSong(asTitle: $0.trackName ?? "", artistCredit: $0.artistName ?? "")
         }
         // Prefer the same album, so a compilation doesn't win over the original release.
         let best = candidates.first { $0.collectionName == track.album } ?? candidates.first
