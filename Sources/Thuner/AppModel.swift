@@ -2079,6 +2079,26 @@ final class AppModel {
         }
     }
 
+    /// For working out why Shazam misses (`defaults write com.idallas.thuner saveMissedClips -bool YES`): the
+    /// audio of the last miss, exactly as Shazam got it, in ~/Library/Caches/Thuner/missed-clip.wav.
+    private static func saveClip(_ samples: [Float], sampleRate: Double) {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
+        let folder = caches.appendingPathComponent("Thuner")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        buffer.frameLength = buffer.frameCapacity
+        samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        let url = folder.appendingPathComponent("missed-clip.wav")
+        try? FileManager.default.removeItem(at: url)
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: buffer)
+        } catch {
+            Logger(subsystem: "com.idallas.thuner", category: "app").error("Couldn't save the missed clip: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func runQuery() {
         guard let samples = capture.ring.latest(seconds: machine.timing.sampleDuration) else {
             // Not enough audio buffered yet (capture just restarted); treat as a miss and try again shortly.
@@ -2095,6 +2115,9 @@ final class AppModel {
             case .noMatch:
                 shazamStatus = .ok
                 note("No match")
+                if UserDefaults.standard.bool(forKey: "saveMissedClips") {
+                    Self.saveClip(samples, sampleRate: capture.ring.sampleRate)
+                }
             case .error(let message):
                 // ShazamCore error 102: the ShazamKit App Service isn't enabled for this bundle ID.
                 if message.contains("error 102") { shazamStatus = .serviceNotEnabled }

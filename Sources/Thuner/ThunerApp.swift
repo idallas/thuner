@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = panel
         AppWindows.shared.openPanel = { [weak panel] in panel?.openPanel() }
         if !model.onboardingComplete { AppWindows.shared.show(.welcome) }
+        MatchFileDiagnostic.runIfAsked()
         // `open Thuner.app --args -openSettingsPane streaming`: straight to a settings tab (for checking UI, or a
         // headless Mac over Screen Sharing).
         if let pane = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openSettingsPane"] as? String,

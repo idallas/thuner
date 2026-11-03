@@ -101,6 +101,8 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 - SwiftUI cost: never animate a value that changes every 0.1 s (it redraws at 60 fps forever), and put views whose text changes many times a second in their own hosting view (`IsolatedView` in StreamWindow.swift), or the whole window is laid out each time.
 - Settings live in UserDefaults (`inputDeviceUID`, `firstChannel`, `thresholdDB`, `role`, `idleImageMinutes`, `inputNames` keyed `uid#firstChannel`), so they can be set over SSH on a headless Mac with `defaults write com.idallas.thuner …`.
 - Logs: `/usr/bin/log stream --predicate 'subsystem == "com.idallas.thuner"'`.
+- Why Shazam misses: `defaults write com.idallas.thuner saveMissedClips -bool YES` saves each miss's audio, as sent, to `~/Library/Caches/Thuner/missed-clip.wav`; `open build/Thuner.app --args -matchFile a.m4a,b.wav` runs the matcher over files in 10 s windows (short clips also at other rates) and logs to category `diagnostic`. Compare with Apple's 30 s preview (`previewUrl` from the iTunes Search API).
+- System Audio (`SystemAudioTap`): the private aggregate runs at its output device's rate, not the rate the tap reports (the Studio Display at 44.1 kHz delivered 44.1 kHz from a tap saying 48 kHz, 9% fast, so nothing matched). Use the aggregate's nominal rate and restart when the output's rate changes. ThUNER leaves its own process out of the tap; Rogue Amoeba's arkaudiod must stay in (with SoundSource running, apps' audio only reaches a tap through it).
 - The turntable Mac is typically a headless Mac mini, managed over SSH.
 
 ## Controls and the API

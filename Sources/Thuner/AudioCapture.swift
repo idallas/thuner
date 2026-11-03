@@ -218,7 +218,10 @@ final class AudioCapture: @unchecked Sendable {
             // None of the chosen apps has opened audio yet; the process watcher restarts capture when one does.
             throw CaptureError.waitingForApps(config.systemAudioApps.count == 1 ? "the chosen app" : "the chosen apps")
         }
-        let tap = try SystemAudioTap(mode: config.systemAudioMode, processes: processes)
+        // Everything (or everything but some apps) leaves out ThUNER's own playback: another Mac's stream isn't
+        // this Mac's music.
+        let excluded = config.systemAudioMode == .only ? [] : AudioDevices.processObjects(for: SystemAudioTap.alwaysExcluded)
+        let tap = try SystemAudioTap(mode: config.systemAudioMode, processes: processes + excluded)
         let format = tap.format
         let channels = 0..<min(Int(format.channelCount), 2)
         let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)!
@@ -236,6 +239,10 @@ final class AudioCapture: @unchecked Sendable {
                 if streamPacketizer.append(left: data[0], right: right, frames: Int(buffer.frameLength)) > 0 { streamSink.packetsReady() }
             }
             self?.process(buffer, channels: channels, mono: mono, target: target, converter: converter)
+        }
+        tap.onChange { [weak self] in
+            self?.log.notice("Output device changed rate; restarting system audio")
+            self?.onInterrupted?()
         }
         systemTap = tap
         if let streamPacketizer {

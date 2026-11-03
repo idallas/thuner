@@ -19,6 +19,10 @@ final class SystemAudioTap {
         case except
     }
 
+    /// Never captured by `.all` or `.except`: ThUNER itself (its playback of another Mac's stream). Not Rogue
+    /// Amoeba's arkaudiod: with SoundSource running, apps' audio reaches a tap only through it.
+    static let alwaysExcluded: Set<String> = [Bundle.main.bundleIdentifier ?? "com.idallas.thuner"]
+
     /// The input picker's id for this pseudo-device.
     static let uid = "com.idallas.thuner.system-audio"
     static let name = "System Audio"
@@ -40,18 +44,20 @@ final class SystemAudioTap {
     /// The private aggregate device to record from.
     let deviceID: AudioDeviceID
     private let tapID: AudioObjectID
+    /// The output device whose clock the aggregate runs on.
+    private let outputID: AudioDeviceID
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     /// The tap's audio format (what the IO callback delivers).
     let format: AVAudioFormat
     private var ioProc: AudioDeviceIOProcID?
     private let ioQueue = DispatchQueue(label: "com.idallas.thuner.system-audio", qos: .userInteractive)
     private let log = Logger(subsystem: "com.idallas.thuner", category: "capture")
 
-    /// - Parameter processes: the Core Audio process objects of the chosen apps (ignored for `.all`).
+    /// - Parameter processes: the Core Audio process objects to capture (`.only`) or leave out (`.all`, `.except`).
     init(mode: Mode = .all, processes: [AudioObjectID] = []) throws {
         let description: CATapDescription = switch mode {
-        case .all: CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         case .only: CATapDescription(stereoMixdownOfProcesses: processes)
-        case .except: CATapDescription(stereoGlobalTapButExcludeProcesses: processes)
+        case .all, .except: CATapDescription(stereoGlobalTapButExcludeProcesses: processes)
         }
         let tapUUID = UUID()
         description.uuid = tapUUID
@@ -63,7 +69,7 @@ final class SystemAudioTap {
         let tapStatus = AudioHardwareCreateProcessTap(description, &tap)
         guard tapStatus == noErr else { throw TapError.createTap(tapStatus) }
 
-        guard let outputUID = Self.defaultOutputUID() else {
+        guard let (outputID, outputUID) = Self.defaultOutput() else {
             AudioHardwareDestroyProcessTap(tap)
             throw TapError.noOutputDevice
         }
@@ -92,16 +98,27 @@ final class SystemAudioTap {
             mElement: kAudioObjectPropertyElementMain)
         var streamDescription = AudioStreamBasicDescription()
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        guard AudioObjectGetPropertyData(tap, &address, 0, nil, &size, &streamDescription) == noErr,
-              let format = AVAudioFormat(streamDescription: &streamDescription) else {
+        let tapRate = AudioObjectGetPropertyData(tap, &address, 0, nil, &size, &streamDescription) == noErr
+            ? streamDescription.mSampleRate : 0
+        // The aggregate delivers the tap at its own rate, its output device's, whatever the tap's format says: with
+        // the Studio Display at 44.1 kHz the tap said 48 kHz, so everything sent to Shazam played 9% fast and high,
+        // and nothing matched.
+        address.mSelector = kAudioDevicePropertyNominalSampleRate
+        var deviceRate = Float64(0)
+        size = UInt32(MemoryLayout<Float64>.size)
+        if AudioObjectGetPropertyData(device, &address, 0, nil, &size, &deviceRate) == noErr, deviceRate > 0 {
+            streamDescription.mSampleRate = deviceRate
+        }
+        guard tapRate > 0, let format = AVAudioFormat(streamDescription: &streamDescription) else {
             AudioHardwareDestroyAggregateDevice(device)
             AudioHardwareDestroyProcessTap(tap)
             throw TapError.createAggregate(-1)
         }
         tapID = tap
         deviceID = device
+        self.outputID = outputID
         self.format = format
-        log.notice("System audio tap ready: \(format.channelCount) ch @ \(format.sampleRate) Hz\(format.isInterleaved ? " interleaved" : "")")
+        log.notice("System audio tap ready: \(format.channelCount) ch @ \(format.sampleRate) Hz (tap says \(tapRate) Hz)\(format.isInterleaved ? " interleaved" : "", privacy: .public)")
     }
 
     /// Starts reading the tap; `handler` gets each buffer (non-interleaved float) on a background queue.
@@ -138,7 +155,25 @@ final class SystemAudioTap {
         ioProc = proc
     }
 
+    /// Calls `handler` on the main queue when the output device's rate changes (or the device goes away): capture
+    /// has to start again at the new rate.
+    func onChange(_ handler: @escaping () -> Void) {
+        for (object, selector) in [(outputID, kAudioDevicePropertyNominalSampleRate), (outputID, kAudioDevicePropertyDeviceIsAlive),
+                                   (deviceID, kAudioDevicePropertyNominalSampleRate)] {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
+            if AudioObjectAddPropertyListenerBlock(object, &address, .main, block) == noErr {
+                listeners.append((object, address, block))
+            }
+        }
+    }
+
     deinit {
+        for (object, address, block) in listeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(object, &address, .main, block)
+        }
         if let ioProc {
             AudioDeviceStop(deviceID, ioProc)
             AudioDeviceDestroyIOProcID(deviceID, ioProc)
@@ -147,7 +182,7 @@ final class SystemAudioTap {
         AudioHardwareDestroyProcessTap(tapID)
     }
 
-    private static func defaultOutputUID() -> String? {
+    private static func defaultOutput() -> (AudioDeviceID, String)? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -160,6 +195,6 @@ final class SystemAudioTap {
         var uid: Unmanaged<CFString>?
         size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &uid) == noErr, let uid else { return nil }
-        return uid.takeRetainedValue() as String
+        return (device, uid.takeRetainedValue() as String)
     }
 }
