@@ -342,10 +342,16 @@ struct MenuView: View {
                 .font(.system(size: 11)).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        // (While standing by for the turntable Mac, the line above already says so.)
-        if model.role == .secondary, !model.arbiterAllowsPush, !model.peerHasControl {
-            Label("Deferring to \(model.lastPrimaryPeer.map(AppModel.shown) ?? "the turntable Mac")", systemImage: "hand.raised")
+        // (While standing by for the other Mac, the line above already says so.)
+        if let target = model.deferral.target, !model.arbiterAllowsPush, !model.peerHasControl {
+            Label("Deferring to \(AppModel.shown(target))\(model.deferral.viaStream ? " (playing its stream)" : "")", systemImage: "hand.raised")
                 .font(.system(size: 11)).foregroundStyle(.orange)
+        }
+        if model.deferral.mutual, let other = model.deferral.mutualWith {
+            Label("\(AppModel.shown(other)) and this Mac defer to each other. Change one in Settings → General.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 11)).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
         }
         if model.hasPermissionProblem {
             Button { open(.settings) } label: {

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ThunerCore
 
-/// Settings: General (this Mac's role, login, Apple Music and Spotify, permission status), Listening, Streaming,
+/// Settings: General (whom this Mac defers to, login, Apple Music and Spotify, permission status), Listening, Streaming,
 /// Display, Controls, Scrobbling, Updates.
 struct SettingsView: View {
     @Bindable var model: AppModel
@@ -39,14 +39,16 @@ struct SettingsView: View {
             case .general:
                 Form {
                     Section {
-                        Picker("This Mac", selection: $model.role) {
-                            Text("Turntable (has priority)").tag(PushArbiter.Role.primary)
-                            Text("Secondary").tag(PushArbiter.Role.secondary)
+                        DeferPicker(model: model)
+                        if model.deferral.mutual, let other = model.deferral.mutualWith {
+                            Label("\(AppModel.shown(other)) also defers to this Mac. \(model.deferral.target == nil ? "This Mac ignores its choice until one of them changes." : "\(AppModel.shown(other)) ignores its choice until one of them changes.")",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                         }
                         Toggle("Launch at login", isOn: $model.launchAtLogin)
                         Toggle("Animate menu bar icon while playing", isOn: $model.animateMenuBarIcon)
                     } footer: {
-                        Text("While the turntable Mac hears music, a secondary Mac turns its mic off and shows what the turntable Mac plays. Listen Here in the menu overrides that until it goes quiet.")
+                        Text("While the Mac it defers to plays, this Mac turns its mic off, shows what that Mac plays and leaves the Tuneshine and scrobbling to it. Listen Here in the menu overrides that until it goes quiet. Playing another Mac's stream defers to it by itself.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
@@ -113,7 +115,7 @@ struct SettingsView: View {
                         }
                         .disabled(!model.micEnabled)
                     } footer: {
-                        Text("Off: ThUNER never uses the microphone or Shazam, and only follows Apple Music, Spotify and a turntable Mac. Choose the input in the menu. Asking keeps the mic off when a player stops, until you click Listen in the menu.")
+                        Text("Off: ThUNER never uses the microphone or Shazam, and only follows Apple Music, Spotify and the Mac it defers to. Choose the input in the menu. Asking keeps the mic off when a player stops, until you click Listen in the menu.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
@@ -289,7 +291,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Scrobbling")
                     } footer: {
-                        Text("Sends Spotify and Apple Music plays on this Mac, plus Shazam matches, to every service below that's switched on. Don't also run Silicio or a service's own Spotify link for the same account. A secondary Mac doesn't scrobble Shazam matches while the turntable Mac is active.")
+                        Text("Sends Spotify and Apple Music plays on this Mac, plus Shazam matches, to every service below that's switched on. Don't also run Silicio or a service's own Spotify link for the same account. Shazam matches here aren't scrobbled while the Mac this one defers to is playing.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 
@@ -883,5 +885,33 @@ private struct InputNameSection: View {
             let channels = device.inputChannels <= 2 ? "" : (first + 1 < device.inputChannels ? " \(first + 1)–\(first + 2)" : " \(first + 1)")
             return (key, name, device.name + channels)
         }
+    }
+}
+
+/// "Defer to": no one, or another ThUNER found on the network. A Mac that already defers to this one is shown but
+/// can't be picked (they would each give way to the other).
+struct DeferPicker: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Picker("Defer to", selection: $model.deferTo) {
+            Text("No one").tag(String?.none)
+            ForEach(choices, id: \.self) { host in
+                if model.defersToThisMac(host) {
+                    Text("\(AppModel.shown(host)) (defers to this Mac)").tag(Optional(host)).disabled(true)
+                } else if model.otherThuners.contains(host) {
+                    Text(AppModel.shown(host)).tag(Optional(host))
+                } else {
+                    Text("\(AppModel.shown(host)) (not found now)").tag(Optional(host))
+                }
+            }
+        }
+    }
+
+    /// The ThUNERs found, plus the current choice while it's away.
+    private var choices: [String] {
+        var hosts = model.otherThuners
+        if let chosen = model.deferTo, !hosts.contains(where: { Deferral.sameMac($0, chosen) }) { hosts.append(chosen) }
+        return hosts
     }
 }

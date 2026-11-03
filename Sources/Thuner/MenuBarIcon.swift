@@ -68,7 +68,7 @@ enum MenuBarIcon {
         case .idle: "ThUNER: idle"
         case .identifying: "ThUNER: identifying"
         case .playing, .level: "ThUNER: playing"
-        case .elsewhere: "ThUNER: the turntable Mac is listening"
+        case .elsewhere: "ThUNER: another Mac is playing"
         case .paused(let auto): auto ? "ThUNER: paused until music plays" : "ThUNER: listening paused"
         }
         return image

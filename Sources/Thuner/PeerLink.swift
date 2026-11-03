@@ -28,7 +28,10 @@ final class PeerLink: NSObject, @unchecked Sendable {
         var id: String? = UUID().uuidString
         var instance: String
         var host: String
+        /// "primary" for a Mac that defers to no one, else "secondary": what ThUNERs before "Defer to" go by.
         var role: String
+        /// Who the sender defers to (nil: no one), so two Macs deferring to each other can tell.
+        var defersTo: String?
         var event: Event
         /// "Artist – Title", for logs.
         var track: String?
@@ -112,16 +115,19 @@ final class PeerLink: NSObject, @unchecked Sendable {
         browser.searchForServices(ofType: "_thuner._udp.", inDomain: "local.")
     }
 
-    func send(_ event: Message.Event, role: String, nowPlaying: Track?) {
-        deliver(Message(instance: instance, host: host, role: role, event: event,
+    func send(_ event: Message.Event, defersTo: String?, nowPlaying: Track?) {
+        deliver(Message(instance: instance, host: host, role: Self.role(defersTo), defersTo: defersTo, event: event,
                         track: nowPlaying?.displayName, nowPlaying: nowPlaying))
     }
 
     /// Tells the other ThUNERs a play came due for scrobbling and which services have it.
-    func sendScrobbled(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool, role: String) {
-        deliver(Message(instance: instance, host: host, role: role, event: .scrobbled, track: track.displayName,
-                        nowPlaying: track, startedAt: startedAt, scrobbledTo: destinations, scrobblingPaused: paused))
+    func sendScrobbled(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool, defersTo: String?) {
+        deliver(Message(instance: instance, host: host, role: Self.role(defersTo), defersTo: defersTo, event: .scrobbled,
+                        track: track.displayName, nowPlaying: track, startedAt: startedAt, scrobbledTo: destinations,
+                        scrobblingPaused: paused))
     }
+
+    private static func role(_ defersTo: String?) -> String { defersTo == nil ? "primary" : "secondary" }
 
     private func deliver(_ message: Message) {
         guard fd >= 0 else { return }

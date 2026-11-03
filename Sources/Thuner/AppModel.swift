@@ -32,7 +32,15 @@ final class AppModel {
     }
     var firstChannel: Int { didSet { save(firstChannel, "firstChannel"); restartCapture() } }
     var thresholdDB: Double { didSet { save(thresholdDB, "thresholdDB"); gate.thresholdDB = silenceThresholdDB } }
-    var role: PushArbiter.Role { didSet { save(role.rawValue, "role"); arbiter.role = role } }
+    /// The other ThUNER to give way to while it plays (nil: no one). Saved as "" for no one, so a copy from before
+    /// "Defer to" can tell it was never set (see `migratingSecondary`).
+    var deferTo: String? {
+        didSet {
+            defaults.set(deferTo ?? "", forKey: "deferTo")
+            migratingSecondary = false
+            deferralChanged()
+        }
+    }
     /// 0 keeps the last cover up indefinitely.
     var idleImageMinutes: Double { didSet { save(idleImageMinutes, "idleImageMinutes"); applyTiming() } }
     /// The Tuneshine to use; empty means automatic (the first one found on the network).
@@ -409,8 +417,7 @@ final class AppModel {
     private(set) var captureError: String?
     private(set) var micDenied = false
     private(set) var log: [LogEntry] = []
-    private(set) var lastPrimaryPeer: String?
-    /// A confirmed track this Mac didn't push because the turntable Mac had the display.
+    /// A confirmed track this Mac didn't push because the Mac it defers to had the display.
     private(set) var deferredPush: Track?
 
     /// The Music or Spotify app playing right now, when it's being used instead of Shazam.
@@ -420,7 +427,7 @@ final class AppModel {
 
     /// What the playback controls act on: the most recently active of Apple Music, Spotify and a website that's still
     /// open (for a website, its browser).
-    /// A paused one counts only while ThUNER isn't showing something else (the turntable Mac's record, say).
+    /// A paused one counts only while ThUNER isn't showing something else (the record on the Mac this one defers to, say).
     private(set) var controllablePlayer: PlayerMonitor.Snapshot?
     /// Shown for a while when a control couldn't be used (ThUNER not allowed to control the app, say).
     private(set) var playbackProblem: String?
@@ -482,12 +489,12 @@ final class AppModel {
             if !Task.isCancelled { self?.playbackProblem = nil }
         }
     }
-    /// The mic is off (a player is reporting the track, listening is paused, or the turntable Mac has it).
+    /// The mic is off (a player is reporting the track, listening is paused, or the Mac this one defers to has it).
     private(set) var micSuspended = false
 
-    // MARK: Pause and the turntable Mac
+    // MARK: Pause and the Mac this one defers to
 
-    /// What the turntable Mac is doing, from its messages.
+    /// What the Mac this one defers to is doing, from its messages.
     struct RemoteNowPlaying: Equatable {
         var host: String
         /// nil while it's still identifying.
@@ -509,13 +516,55 @@ final class AppModel {
             updateCapture()
         }
     }
-    /// Listen and update the display here even though the turntable Mac is playing. Lasts until it goes quiet.
+    /// Listen and update the display here even though the Mac this one defers to is playing. Lasts until it goes
+    /// quiet.
     private(set) var overridingPeer = false
 
-    /// The turntable Mac is playing, so this (secondary) Mac stays out of the way: mic off, no pushes.
+    /// What each other ThUNER says it defers to, by host, from their messages.
+    private(set) var peersDeferTo: [String: String] = [:]
+    /// A copy from before "Defer to" that was a secondary Mac: it defers to the first old-style primary it hears.
+    @ObservationIgnored private var migratingSecondary = false
+    /// This Mac's names, as other ThUNERs may give them: computer name, then host name.
+    private static let myNames = [Host.current().localizedName, ProcessInfo.processInfo.hostName].compactMap { $0 }
+
+    /// Who this Mac gives way to right now: the Mac whose stream it plays, else the one chosen in Settings.
+    var deferral: Deferral {
+        let streaming = streamSource.isEmpty || streamSource == Self.streamThisMac ? nil : streamSource
+        return Deferral.resolve(chosen: deferTo, streamingFrom: streaming, me: Self.myNames, peersDeferTo: peersDeferTo)
+    }
+    @ObservationIgnored private var lastDeferral = Deferral.none
+
+    /// Whether another ThUNER says it defers to this Mac (so picking it here would make them give way to each other).
+    func defersToThisMac(_ host: String) -> Bool {
+        guard let theirs = peersDeferTo.first(where: { Deferral.sameMac($0.key, host) })?.value else { return false }
+        return Self.myNames.contains { Deferral.sameMac($0, theirs) }
+    }
+
+    /// The Mac this one defers to is playing, so this one stays out of the way: mic off, no pushes.
     var peerHasControl: Bool {
-        guard role == .secondary, !overridingPeer, let remote else { return false }
+        guard let target = deferral.target, !overridingPeer, let remote, Deferral.sameMac(remote.host, target) else { return false }
         return remote.isCurrent(at: Date())
+    }
+
+    /// The Mac to defer to changed (the setting, a stream, or the other Mac's own setting): forget the old one's
+    /// activity and say so.
+    private func deferralChanged() {
+        let now = deferral
+        guard now != lastDeferral else { return }
+        let before = lastDeferral
+        lastDeferral = now
+        if let target = now.target, before.target.map({ !Deferral.sameMac($0, target) }) ?? true {
+            arbiter.primaryWentIdle()
+            if let remote, !Deferral.sameMac(remote.host, target) { self.remote = nil }
+            note("Deferring to \(target)\(now.viaStream ? " (playing its stream)" : "")")
+        } else if now.target == nil, before.target != nil {
+            arbiter.primaryWentIdle()
+            remote = nil
+            note(now.mutual ? "\(now.mutualWith ?? "The other Mac") also defers to this Mac; not deferring to it"
+                            : "Not deferring to another Mac")
+        }
+        arbiter.role = now.target == nil ? .primary : .secondary
+        updateCapture()
     }
 
     enum MicOffReason: Equatable {
@@ -542,7 +591,7 @@ final class AppModel {
         return nil
     }
 
-    /// What the panel and floating cover show: the turntable Mac's track while it has control.
+    /// What the panel and floating cover show: the other Mac's track while it has control.
     var shownTrack: Track? {
         if peerHasControl, let track = remote?.track { return track }
         return machine.displayed
@@ -660,7 +709,7 @@ final class AppModel {
     }
 
     /// Listen with a microphone or input at all. Off means Shazam is never used and the mic is never touched
-    /// (or asked for): ThUNER follows Apple Music and Spotify (and the turntable Mac) only.
+    /// (or asked for): ThUNER follows Apple Music and Spotify (and the Mac it defers to) only.
     var micEnabled: Bool {
         didSet {
             guard micEnabled != oldValue else { return }
@@ -700,7 +749,7 @@ final class AppModel {
     }
 
     private func checkAutoPause(at now: Date) {
-        // Activity means music actually identified (or a player, or the turntable Mac playing). Noise over the
+        // Activity means music actually identified (or a player, or the Mac it defers to playing). Noise over the
         // threshold that never matches doesn't count, or a loud room would keep the mic on, and Shazam busy,
         // all night.
         if machine.state == .playing || activePlayer != nil || peerHasControl || pausedManually {
@@ -742,7 +791,7 @@ final class AppModel {
 
     func listenHereAnyway() {
         overridingPeer = true
-        note("Listening here even though \(remote?.host ?? "the turntable Mac") is playing")
+        note("Listening here even though \(remote?.host ?? "the other Mac") is playing")
         updateCapture()
     }
 
@@ -897,11 +946,14 @@ final class AppModel {
     init() {
         let d = UserDefaults.standard
         let threshold = d.object(forKey: "thresholdDB") as? Double ?? -45
-        let role = PushArbiter.Role(rawValue: d.string(forKey: "role") ?? "") ?? .secondary
         inputDeviceUID = d.string(forKey: "inputDeviceUID")
         firstChannel = d.integer(forKey: "firstChannel")
         thresholdDB = threshold
-        self.role = role
+        // "Defer to" replaced the turntable/secondary role. A turntable Mac defers to no one; a secondary one
+        // defers to the first turntable Mac it hears from (`migratingSecondary`). New copies start with no one.
+        let legacyRole = d.string(forKey: "role")
+        let savedDeferTo = d.string(forKey: "deferTo")
+        deferTo = savedDeferTo.flatMap { $0.isEmpty ? nil : $0 }
         idleImageMinutes = d.object(forKey: "idleImageMinutes") as? Double ?? 5
         tuneshineHost = d.string(forKey: "tuneshineHost") ?? ""
         scrobblingEnabled = d.bool(forKey: "scrobblingEnabled")
@@ -920,9 +972,9 @@ final class AppModel {
         systemAudioMode = SystemAudioTap.Mode(rawValue: d.string(forKey: "systemAudioMode") ?? "") ?? .all
         systemAudioApps = d.data(forKey: "systemAudioApps").flatMap { try? JSONDecoder().decode([AudioDevices.AudioApp].self, from: $0) } ?? []
         recentAudioApps = d.data(forKey: "recentAudioApps").flatMap { try? JSONDecoder().decode([AudioDevices.AudioApp].self, from: $0) } ?? []
-        // On by default for a room mic; off for the turntable Mac, whose line-in isn't a privacy concern and
-        // which (headless) would rarely see a wake signal.
-        autoPauseMinutes = d.object(forKey: "autoPauseMinutes") as? Double ?? (role == .primary ? 0 : 30)
+        // On by default for a room mic; off for a turntable Mac set up before "Defer to" (its line-in isn't a
+        // privacy concern, and headless it would rarely see a wake signal). "role" is only read now, for this.
+        autoPauseMinutes = d.object(forKey: "autoPauseMinutes") as? Double ?? (legacyRole == "primary" ? 0 : 30)
         let savedToken = d.string(forKey: "apiToken") ?? ""
         let token = savedToken.isEmpty ? Self.makeToken() : savedToken
         if savedToken.isEmpty { d.set(token, forKey: "apiToken") }
@@ -983,7 +1035,14 @@ final class AppModel {
         useNowPlaying = d.object(forKey: "useNowPlaying") as? Bool ?? true
         askBeforeMicAfterPlayer = d.object(forKey: "askBeforeMicAfterPlayer") as? Bool ?? true
         gate = LevelGate(thresholdDB: d.string(forKey: "inputDeviceUID") == SystemAudioTap.uid ? Self.systemAudioThresholdDB : threshold)
-        arbiter = PushArbiter(role: role)
+        arbiter = PushArbiter(role: .primary)
+        if savedDeferTo == nil {
+            if onboardingComplete, legacyRole != "primary" {
+                migratingSecondary = true
+            } else {
+                d.set("", forKey: "deferTo")
+            }
+        }
         applyTiming()
 
         // The Tuneshine keeps showing Thuner's last image across a relaunch, so show it here too (no re-push).
@@ -1415,15 +1474,13 @@ final class AppModel {
         case .opened:
             silentSince = nil
             note("Audio detected")
-            if role == .primary {
-                lastHeartbeat = now
-                peers.send(.active, role: role.rawValue, nowPlaying: nil)
-            }
+            lastHeartbeat = now
+            peers.send(.active, defersTo: deferTo, nowPlaying: nil)
             perform(machine.audioStarted(at: now))
         case .closed:
             silentSince = now
             note("Silence")
-            if role == .primary, activePlayer == nil { peers.send(.idle, role: role.rawValue, nowPlaying: nil) }
+            if activePlayer == nil { peers.send(.idle, defersTo: deferTo, nowPlaying: nil) }
             deferredPush = nil
             perform(machine.audioStopped(at: now))
         case nil:
@@ -1489,17 +1546,18 @@ final class AppModel {
             deferredPush = nil
             // Only if it's still what's playing here; otherwise it's stale (the player stopped, the record changed).
             if isPlayingHere(track) {
-                note("Turntable Mac has gone quiet; taking over the display")
+                note("\(lastDeferral.target ?? "The other Mac") has gone quiet; taking over the display")
                 push(track)
             }
         }
 
-        // The turntable Mac speaks up as soon as it hears audio, not just once a track is confirmed, so the
-        // other Mac doesn't race it to the display while it's still identifying.
-        if role == .primary, machine.state != .idle || activePlayer != nil, now.timeIntervalSince(lastHeartbeat) > 30 {
+        // Every ThUNER speaks up as soon as it hears audio, not just once a track is confirmed, so a Mac deferring
+        // to it doesn't race it to the display while it's still identifying.
+        if machine.state != .idle || activePlayer != nil, now.timeIntervalSince(lastHeartbeat) > 30 {
             lastHeartbeat = now
-            peers.send(.active, role: role.rawValue, nowPlaying: activePlayer?.track ?? machine.current?.track)
+            peers.send(.active, defersTo: deferTo, nowPlaying: activePlayer?.track ?? machine.current?.track)
         }
+        deferralChanged()
 
         if let stopped = clearAfterQuietSince, activePlayer == nil {
             if machine.state == .playing {
@@ -1562,7 +1620,7 @@ final class AppModel {
         return machine.state == .playing && machine.current?.track.isSameSong(as: track) == true
     }
 
-    /// What the web display shows: the same track as the panel, including the turntable Mac's.
+    /// What the web display shows: the same track as the panel, including the other Mac's.
     @ObservationIgnored private var lastWidgetState: WebDisplayServer.NowPlaying?
 
     private var webNowPlaying: WebDisplayServer.NowPlaying {
@@ -1768,7 +1826,7 @@ final class AppModel {
             push(playing.track)
         } else {
             deferredPush = playing.track
-            note("\(playing.track.displayName) on \(playing.name), but the turntable Mac has the display")
+            note("\(playing.track.displayName) on \(playing.name), but \(lastDeferral.target ?? "the other Mac") has the display")
         }
     }
 
@@ -1905,7 +1963,7 @@ final class AppModel {
             }
             return
         }
-        // The secondary Mac's mic can hear the turntable, so it stays quiet while the turntable Mac is active.
+        // A Mac deferring to another can hear its music, so it stays quiet while that Mac is active.
         // Plays reported by Spotify/Music on this Mac are real regardless.
         guard activePlayer != nil || canPush(at: now) else { return }
         switch action {
@@ -1973,13 +2031,13 @@ final class AppModel {
         return has
     }
 
-    /// The turntable Mac tells the others where each play went, so they can send it to services it doesn't have.
+    /// Every ThUNER tells the others where each play went, so a Mac deferring to it can send the play to services
+    /// it doesn't have.
     private func announceScrobble(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool = false) {
-        guard role == .primary else { return }
-        peers.sendScrobbled(track, startedAt: startedAt, to: destinations, paused: paused, role: role.rawValue)
+        peers.sendScrobbled(track, startedAt: startedAt, to: destinations, paused: paused, defersTo: deferTo)
     }
 
-    /// The turntable Mac scrobbled a play: send it to this Mac's services it didn't, so a service set up on only
+    /// The Mac this one defers to scrobbled a play: send it to this Mac's services it didn't, so a service set up on only
     /// one Mac still gets the records. Nothing while scrobbling is paused on either Mac.
     private func relayScrobble(_ track: Track, startedAt: Date, from host: String, skipping destinations: [String],
                                paused: Bool) {
@@ -2097,7 +2155,7 @@ final class AppModel {
                     push(track)
                 } else {
                     deferredPush = track
-                    note("Confirmed \(track.displayName), but the turntable Mac has the display")
+                    note("Confirmed \(track.displayName), but \(lastDeferral.target ?? "the other Mac") has the display")
                 }
             case .showIdleImage:
                 guard activePlayer == nil, canPush(at: Date()) else { break }
@@ -2168,10 +2226,8 @@ final class AppModel {
         pushRetry = nil
         clearRetry = nil
         note("Showing \(track.displayName)")
-        if role == .primary {
-            lastHeartbeat = Date()
-            peers.send(.push, role: role.rawValue, nowPlaying: track)
-        }
+        lastHeartbeat = Date()
+        peers.send(.push, defersTo: deferTo, nowPlaying: track)
         let display = display
         Task {
             do {
@@ -2191,8 +2247,15 @@ final class AppModel {
     }
 
     private func received(_ message: PeerLink.Message) {
-        guard message.role == PushArbiter.Role.primary.rawValue else { return }
-        lastPrimaryPeer = message.host
+        // Who it defers to (ThUNERs from before "Defer to" don't say; take a turntable Mac as no one).
+        if let theirs = message.defersTo { peersDeferTo[message.host] = theirs } else { peersDeferTo[message.host] = nil }
+        if migratingSecondary, message.role == PushArbiter.Role.primary.rawValue {
+            deferTo = message.host
+            note("Deferring to \(message.host), the turntable Mac (Settings → General → Defer to)")
+        }
+        deferralChanged()
+        // Only the Mac this one defers to matters from here on.
+        guard let target = lastDeferral.target, Deferral.sameMac(message.host, target) else { return }
         let hadControl = peerHasControl
         switch message.event {
         case .idle:
@@ -2203,7 +2266,7 @@ final class AppModel {
         case .active, .push:
             arbiter.primaryWasActive(at: Date())
             remote = RemoteNowPlaying(host: message.host, track: message.nowPlaying, updatedAt: Date())
-            // The turntable Mac's plays go in this Mac's history too (it scrobbles them itself, if it does).
+            // The other Mac's plays go in this Mac's history too (it scrobbles them itself, if it does).
             // Repeats of the same play (every heartbeat carries it) just update its row.
             if let track = message.nowPlaying {
                 let before = history

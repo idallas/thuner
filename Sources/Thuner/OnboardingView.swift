@@ -129,11 +129,9 @@ struct OnboardingView: View {
                 if !model.otherThuners.isEmpty {
                     Divider().padding(.vertical, 4)
                     Text("Also found ThUNER on \(model.otherThuners.joined(separator: ", ")).")
-                    Picker("This Mac", selection: $model.role) {
-                        Text("Is the turntable Mac (has priority)").tag(PushArbiter.Role.primary)
-                        Text("Is another Mac (stands by while the turntable plays)").tag(PushArbiter.Role.secondary)
-                    }
-                    .pickerStyle(.radioGroup)
+                    DeferPicker(model: model)
+                    Text("While that Mac plays, this one leaves the Tuneshine and scrobbling to it. Playing another Mac's stream does this by itself.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Divider().padding(.vertical, 4)
