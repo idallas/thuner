@@ -60,7 +60,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     private var fd: Int32 = -1
     private var source: DispatchSourceRead?
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "peers")
+    private let log = ThunerLogger("peers")
 
     // Bonjour: our own advertisement, the browser, and the IPv4 addresses of the other instances by service name.
     private var advertisement: NetService?
@@ -153,7 +153,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
             }
             if sent >= 0 { delivered += 1 }
         }
-        log.notice("Sent \(event.rawValue, privacy: .public) to \(self.peers.count) ThUNER(s) plus broadcast (\(nowPlaying?.displayName ?? "", privacy: .public))")
+        log.notice("Sent \(event.rawValue) to \(self.peers.count) ThUNER(s) plus broadcast (\(nowPlaying?.displayName ?? ""))")
         if delivered == 0 { log.error("Couldn't send to other ThUNERs: errno \(errno)") }
     }
 
@@ -200,9 +200,9 @@ final class PeerLink: NSObject, @unchecked Sendable {
             return
         }
         if peers[service.name] == nil {
-            log.notice("Found another ThUNER at \(service.hostName ?? "?", privacy: .public)")
+            log.notice("Found another ThUNER at \(service.hostName ?? "?")")
         } else if Set(peers[service.name]!.map(\.sin_addr.s_addr)) != Set(addresses.map(\.sin_addr.s_addr)) {
-            log.notice("\(service.hostName ?? "?", privacy: .public) is now at \(addresses.map { Self.string($0.sin_addr) }.joined(separator: ", "), privacy: .public)")
+            log.notice("\(service.hostName ?? "?") is now at \(addresses.map { Self.string($0.sin_addr) }.joined(separator: ", "))")
             peers[service.name] = addresses
             onAddressesChanged?()
         } else {
@@ -237,7 +237,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
         guard sender.sin_family == sa_family_t(AF_INET), isKnownPeer(sender.sin_addr) else {
             // Our own broadcast, heard back from this Mac's other address (Ethernet and Wi-Fi both up).
             if Self.isOwnAddress(sender.sin_addr) { return }
-            log.notice("Ignoring a message from \(Self.string(sender.sin_addr), privacy: .public): not a ThUNER found over Bonjour")
+            log.notice("Ignoring a message from \(Self.string(sender.sin_addr)): not a ThUNER found over Bonjour")
             refreshAddresses()
             return
         }
@@ -249,7 +249,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
             recentMessageIDs.append(id)
             if recentMessageIDs.count > 64 { recentMessageIDs.removeFirst(recentMessageIDs.count - 64) }
         }
-        log.notice("Heard \(message.event.rawValue, privacy: .public) from \(message.host, privacy: .public) (\(message.role, privacy: .public))")
+        log.notice("Heard \(message.event.rawValue) from \(message.host) (\(message.role))")
         onMessage?(message)
     }
 }
@@ -332,7 +332,7 @@ extension PeerLink: NetServiceBrowserDelegate, NetServiceDelegate {
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
         resolving.removeAll { $0 === sender }
-        log.notice("Couldn't look up another ThUNER yet (\(errorDict.description, privacy: .public)); trying again")
+        log.notice("Couldn't look up another ThUNER yet (\(errorDict.description)); trying again")
         resolveAgain(sender)
     }
 }

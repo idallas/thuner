@@ -13,6 +13,9 @@ import ThunerCore
 ///   GET  /api/events          Server-Sent Events: a snapshot, then every control and now-playing change
 ///                             (?levels=1 adds the live input meter, about 10 a second)
 ///   POST /api/controls/<id>   {"value": 0.5} turns a level, {"press": true} presses, {"on": true} sets a toggle
+///   GET  /api/activity        the activity log (?level=activity|everything, ?after=<id>, ?limit=); needs the token
+///                             even to read, like ?activity=1 on the event stream, since the log names tracks,
+///                             accounts and addresses
 ///
 /// Reading is open to the network (that's what lets other screens show the display). Changing anything needs
 /// the API token (`Authorization: Bearer <token>` or `?token=`), except from programs on this Mac itself.
@@ -50,6 +53,8 @@ final class WebDisplayServer: @unchecked Sendable {
     var onAction: (@Sendable (_ id: String, _ action: Action) -> Void)?
     /// Called (on the main queue) with each event from Web Scrobbler's webhook.
     var onWebScrobbler: (@Sendable (WebScrobblerEvent) -> Void)?
+    /// Answers `/api/activity`: entries after an id (or the most recent `limit`), at a level.
+    var activityProvider: (@Sendable (_ after: Int?, _ level: ActivityLog.Level, _ limit: Int) -> [ActivityLog.Entry])?
 
     private let queue = DispatchQueue(label: "com.idallas.thuner.web")
     private let lock = NSLock()
@@ -58,12 +63,13 @@ final class WebDisplayServer: @unchecked Sendable {
     private var version = 1
     private var controls: [ControlInfo] = []
     private var token = ""
-    /// Open event streams, and whether each asked for live meter levels (?levels=1).
-    private var eventStreams: [ObjectIdentifier: (connection: NWConnection, levels: Bool)] = [:]
+    /// Open event streams, and whether each asked for live meter levels (?levels=1) or activity log lines
+    /// (?activity=1).
+    private var eventStreams: [ObjectIdentifier: (connection: NWConnection, levels: Bool, activity: Bool)] = [:]
     /// Controls whose changes are meter readings, only sent to streams that ask for them.
     private static let meterControls: Set<String> = ["inputLevel"]
     private var keepAlive: DispatchSourceTimer?
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "web")
+    private let log = ThunerLogger("web")
 
     private(set) var port: UInt16 = defaultPort
     var isRunning: Bool { listener != nil }
@@ -83,7 +89,7 @@ final class WebDisplayServer: @unchecked Sendable {
             listener.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready: self?.log.notice("Web display and API at http://localhost:\(port)/")
-                case .failed(let error): self?.log.error("Web server failed: \(error.localizedDescription, privacy: .public)")
+                case .failed(let error): self?.log.error("Web server failed: \(error.localizedDescription)")
                 default: break
                 }
             }
@@ -91,7 +97,7 @@ final class WebDisplayServer: @unchecked Sendable {
             self.listener = listener
             startKeepAlive()
         } catch {
-            log.error("Couldn't start the web server on port \(port): \(error.localizedDescription, privacy: .public)")
+            log.error("Couldn't start the web server on port \(port): \(error.localizedDescription)")
         }
     }
 
@@ -133,6 +139,11 @@ final class WebDisplayServer: @unchecked Sendable {
         var event: [String: Any] = ["type": "control", "id": id]
         Self.addState(state, to: &event)
         broadcast(event, meter: Self.meterControls.contains(id))
+    }
+
+    /// A new activity log line, for streams that asked for them.
+    func activityEvent(_ entry: ActivityLog.Entry) {
+        broadcast(["type": "activity", "entry": Self.json(entry)], activity: true)
     }
 
     // MARK: Requests
@@ -244,6 +255,7 @@ final class WebDisplayServer: @unchecked Sendable {
                     "GET /api/controls": "every control with its current value, text and on",
                     "GET /api/events": "Server-Sent Events: a snapshot, then control and nowPlaying changes (?levels=1 adds the live input meter, ~10/s)",
                     "POST /api/controls/<id>": "{\"value\": 0-1} turns a level, {\"press\": true} presses, {\"on\": bool} sets a toggle",
+                    "GET /api/activity": "the activity log, newest last (?level=activity|everything, ?after=<id> for what came after an entry, ?limit=, default 500); needs the token, as does ?activity=1 on /api/events",
                     "GET /now.json": "what's playing",
                     "POST /webscrobbler": "the Web Scrobbler browser extension's Webhook (nowplaying, paused, resumedplaying)",
                 ],
@@ -252,7 +264,20 @@ final class WebDisplayServer: @unchecked Sendable {
         case ("GET", "/api/controls"):
             sendJSON(connection, ["controls": controlsJSON()])
         case ("GET", "/api/events"):
-            openEventStream(connection, levels: request.query["levels"] == "1")
+            if request.query["activity"] == "1", !hasToken(request) {
+                sendJSON(connection, ["error": "unauthorized: the activity log needs the API token from ThUNER's Settings"], status: "401 Unauthorized")
+            } else {
+                openEventStream(connection, levels: request.query["levels"] == "1", activity: request.query["activity"] == "1")
+            }
+        case ("GET", "/api/activity"):
+            guard hasToken(request) else {
+                sendJSON(connection, ["error": "unauthorized: the activity log needs the API token from ThUNER's Settings"], status: "401 Unauthorized")
+                return
+            }
+            let level: ActivityLog.Level = request.query["level"] == "everything" ? .detail : .activity
+            let limit = min(max(request.query["limit"].flatMap(Int.init) ?? 500, 1), 5000)
+            let entries = activityProvider?(request.query["after"].flatMap(Int.init), level, limit) ?? []
+            sendJSON(connection, ["entries": entries.map(Self.json), "latest": entries.last.map { $0.id as Any } ?? NSNull()])
         case ("GET", let path) where path.hasPrefix("/artwork/"):
             // Covers taken from the Music app (LocalArtwork); only names ThUNER made, nothing else on disk.
             let name = String(path.dropFirst("/artwork/".count))
@@ -340,6 +365,15 @@ final class WebDisplayServer: @unchecked Sendable {
         return Self.matches(bearer, token) || Self.matches(request.query["token"], token)
     }
 
+    /// The token itself, with no exception for this Mac: for the activity log, which names tracks, accounts and
+    /// addresses.
+    private func hasToken(_ request: Request) -> Bool {
+        lock.lock(); let token = self.token; lock.unlock()
+        guard !token.isEmpty else { return false }
+        let bearer = request.headers["authorization"].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil }
+        return Self.matches(bearer, token) || Self.matches(request.query["token"], token)
+    }
+
     /// Compares in constant time, so response timing says nothing about how much of a guess was right.
     private static func matches(_ candidate: String?, _ token: String) -> Bool {
         guard let candidate else { return false }
@@ -353,7 +387,7 @@ final class WebDisplayServer: @unchecked Sendable {
     /// Enough for every screen and dashboard in a house; stops a flood of connections from piling up memory.
     private static let maxEventStreams = 32
 
-    private func openEventStream(_ connection: NWConnection, levels: Bool) {
+    private func openEventStream(_ connection: NWConnection, levels: Bool, activity: Bool) {
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
             + "Access-Control-Allow-Origin: *\r\nConnection: keep-alive\r\n\r\n"
         lock.lock()
@@ -365,7 +399,7 @@ final class WebDisplayServer: @unchecked Sendable {
         var nowPlaying = Self.json(current)
         nowPlaying["version"] = version
         let snapshot: [String: Any] = ["type": "snapshot", "controls": controlsJSONLocked(), "nowPlaying": nowPlaying]
-        eventStreams[ObjectIdentifier(connection)] = (connection, levels)
+        eventStreams[ObjectIdentifier(connection)] = (connection, levels, activity)
         lock.unlock()
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection else { return }
@@ -375,8 +409,10 @@ final class WebDisplayServer: @unchecked Sendable {
         connection.send(content: Data(head.utf8) + Self.event(snapshot), completion: .contentProcessed { _ in })
     }
 
-    private func broadcast(_ payload: [String: Any], meter: Bool = false) {
-        lock.lock(); let streams = eventStreams.values.filter { !meter || $0.levels }.map(\.connection); lock.unlock()
+    private func broadcast(_ payload: [String: Any], meter: Bool = false, activity: Bool = false) {
+        lock.lock()
+        let streams = eventStreams.values.filter { (!meter || $0.levels) && (!activity || $0.activity) }.map(\.connection)
+        lock.unlock()
         guard !streams.isEmpty else { return }
         let data = Self.event(payload)
         for stream in streams {
@@ -430,6 +466,29 @@ final class WebDisplayServer: @unchecked Sendable {
 
     private static func json(_ nowPlaying: NowPlaying) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(nowPlaying))) as? [String: Any] ?? [:]
+    }
+
+    private static let isoDate: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func json(_ entry: ActivityLog.Entry) -> [String: Any] {
+        [
+            "id": entry.id, "date": isoDate.string(from: entry.date), "time": entry.date.timeIntervalSince1970,
+            "level": entry.level == .activity ? "activity" : "everything", "category": entry.category,
+            "message": entry.message, "error": entry.isError,
+        ]
+    }
+
+    /// An entry as `json(_:)` wrote it, from another Mac.
+    static func entry(from json: [String: Any]) -> ActivityLog.Entry? {
+        guard let id = json["id"] as? Int, let time = json["time"] as? Double, let category = json["category"] as? String,
+              let message = json["message"] as? String else { return nil }
+        return ActivityLog.Entry(id: id, date: Date(timeIntervalSince1970: time),
+                                 level: json["level"] as? String == "activity" ? .activity : .detail,
+                                 category: category, message: message, isError: json["error"] as? Bool ?? false)
     }
 
     private static func event(_ payload: [String: Any]) -> Data {

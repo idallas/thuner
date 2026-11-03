@@ -327,7 +327,7 @@ private struct SessionTotals: View {
 
 /// A view in a hosting view of its own, so its frequent changes stay inside it. It tells the window its height
 /// when that changes (rarely), and otherwise the window never lays it out.
-private struct IsolatedView<Content: View>: NSViewRepresentable {
+struct IsolatedView<Content: View>: NSViewRepresentable {
     let content: Content
     @Binding var height: CGFloat
 

@@ -198,7 +198,7 @@ final class DeviceInputTap {
         for i in 0..<streams { flags[i] = enabled ? 1 : 0 }
         let status = AudioObjectSetPropertyData(device, &address, 0, nil, size, raw)
         if status != noErr {
-            Logger(subsystem: "com.idallas.thuner", category: "stream").error("Couldn't set IOProc stream usage (OSStatus \(status))")
+            ThunerLogger("stream").error("Couldn't set IOProc stream usage (OSStatus \(status))")
         }
     }
 

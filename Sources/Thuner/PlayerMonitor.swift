@@ -45,7 +45,7 @@ final class PlayerMonitor {
 
     private(set) var latest: [Source: Snapshot] = [:]
     private let artwork = ArtworkLookup()
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "players")
+    private let log = ThunerLogger("players")
     private var observers: [NSObjectProtocol] = []
 
     func start() {
@@ -131,7 +131,7 @@ final class PlayerMonitor {
         guard let browser = latest[.browser], browser.isPlaying else { return }
         let remaining = browser.track.duration.map { max($0 - (browser.position ?? 0), 0) } ?? 600
         guard now.timeIntervalSince(browser.receivedAt) > remaining + 30 else { return }
-        log.notice("\(browser.name, privacy: .public): no word since the song should have ended; counting it as stopped")
+        log.notice("\(browser.name): no word since the song should have ended; counting it as stopped")
         var stopped = browser
         stopped.isPlaying = false
         stopped.receivedAt = now
@@ -184,7 +184,7 @@ final class PlayerMonitor {
                           appBundleID: appBundleID))
             return nil
         }
-        log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
+        log.notice("\(site ?? source.rawValue): \(playing ? "playing" : "paused") \(track.displayName)")
         return Task {
             var track = track
             var found = await artwork.find(for: track)
@@ -192,7 +192,7 @@ final class PlayerMonitor {
                 for reading in readings {
                     let other = await artwork.find(for: reading)
                     guard other.appleMusicID != nil || other.url != nil else { continue }
-                    log.notice("\(site ?? source.rawValue, privacy: .public): reading it as \(reading.displayName, privacy: .public)")
+                    log.notice("\(site ?? source.rawValue): reading it as \(reading.displayName)")
                     track = reading
                     found = other
                     break
@@ -204,7 +204,7 @@ final class PlayerMonitor {
             if source == .nowPlaying,
                appBundleID.map { WebScrobblerEvent.Browser.allBundleIDs.contains($0) || $0 == Self.airPlayBundleID } ?? true,
                track.album == nil, found.appleMusicID == nil {
-                log.notice("\(site ?? source.rawValue, privacy: .public): \(track.displayName, privacy: .public) doesn't look like music; ignoring it")
+                log.notice("\(site ?? source.rawValue): \(track.displayName) doesn't look like music; ignoring it")
                 if let current = latest[source], current.isPlaying {
                     var stopped = current
                     stopped.isPlaying = false

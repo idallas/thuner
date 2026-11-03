@@ -105,7 +105,7 @@ final class AudioCapture: @unchecked Sendable {
     private let processing = DispatchQueue(label: "com.idallas.thuner.capture", qos: .userInitiated)
     private var followingDefault = false
     private var watchingDefault = false
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "capture")
+    private let log = ThunerLogger("capture")
 
     private(set) var activeDeviceName: String?
     /// Reads the input (and shares it, when sharing).
@@ -186,10 +186,10 @@ final class AudioCapture: @unchecked Sendable {
         processingTimer = timer
         activeDeviceName = device.name
         ring.clear()
-        log.notice("Capturing from \(device.name, privacy: .public), channels \(tap.channelLabel, privacy: .public) @ \(rate) Hz, I/O buffer \(tap.ioBufferFrames) frames")
+        log.notice("Capturing from \(device.name), channels \(tap.channelLabel) @ \(rate) Hz, I/O buffer \(tap.ioBufferFrames) frames")
         if let sharing, let packetizer = tap.packetizer {
             sharing.attach(packetizer, source: config.sourceName ?? device.name, latencyFrames: tap.latencyFrames)
-            log.notice("Sharing \(device.name, privacy: .public)")
+            log.notice("Sharing \(device.name)")
         }
     }
 
@@ -275,7 +275,7 @@ final class AudioCapture: @unchecked Sendable {
         var size = UInt32(MemoryLayout<UInt32>.size)
         let status = AudioObjectSetPropertyData(device, &address, 0, nil, size, &value)
         if status != noErr {
-            Logger(subsystem: "com.idallas.thuner", category: "capture").error("Couldn't set the I/O buffer to \(frames) frames (OSStatus \(status))")
+            ThunerLogger("capture").error("Couldn't set the I/O buffer to \(frames) frames (OSStatus \(status))")
         }
         AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value)
         return Int(value)
@@ -327,7 +327,7 @@ final class AudioCapture: @unchecked Sendable {
             return mixed
         }
         if let error {
-            log.error("Sample rate conversion failed: \(error.localizedDescription, privacy: .public)")
+            log.error("Sample rate conversion failed: \(error.localizedDescription)")
             return
         }
         ring.append(UnsafeBufferPointer(start: converted.floatChannelData![0], count: Int(converted.frameLength)))

@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class AppWindows: NSObject, NSWindowDelegate {
     enum Kind {
-        case settings, history, about, welcome, stream
+        case settings, history, about, welcome, stream, activity
     }
 
     static let shared = AppWindows()
@@ -23,7 +23,7 @@ final class AppWindows: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
         // Settings opens with nothing selected: otherwise its first text field (the stream password, an input's
         // name) takes the cursor and the pane scrolls down to it.
-        if kind == .settings || kind == .stream { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
+        if kind == .settings || kind == .stream || kind == .activity { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
     /// Settings, on a particular tab.
@@ -68,6 +68,11 @@ final class AppWindows: NSObject, NSWindowDelegate {
             window.title = "ThUNER Stream"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 620, height: 760))
+        case .activity:
+            window = FocusClearingWindow(contentViewController: NSHostingController(rootView: ActivityWindowView(model: model)))
+            window.title = "ThUNER Activity"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 760, height: 560))
         case .welcome:
             let tour = OnboardingView(model: model, showPanel: { [weak self] in self?.openPanel() }, finish: { [weak self] in
                 self?.windows[.welcome]?.close()

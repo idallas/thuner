@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The activity log first, so what launch says goes after what the last run said.
+        ActivityStore.shared.load()
         let model = AppModel()
         self.model = model
         AppModel.current = model
@@ -47,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openStreamWindow"] != nil {
             AppWindows.shared.show(.stream)
+        }
+        if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openActivityWindow"] != nil {
+            AppWindows.shared.show(.activity)
         }
         if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openPanel"] != nil {
             panel.openPanel()

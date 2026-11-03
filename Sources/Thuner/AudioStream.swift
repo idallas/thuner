@@ -35,7 +35,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         didSet {
             guard idle != oldValue else { return }
             shared.withLock { $0.idle = idle }
-            log.notice("\(self.idle ? "Input silent; pausing the stream" : "Input back; resuming the stream", privacy: .public)")
+            log.notice("\(self.idle ? "Input silent; pausing the stream" : "Input back; resuming the stream")")
         }
     }
     /// Decides whether an address belongs to another ThUNER (found over Bonjour). Main thread.
@@ -90,7 +90,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     @MainActor private func passwordProblem(_ problem: StreamWire.Status.PasswordProblem, to address: sockaddr_in) {
         if Date().timeIntervalSince(lastPasswordLog) > 10 {
             lastPasswordLog = Date()
-            log.notice("Stream request from \(UDP.string(address.sin_addr), privacy: .public) without the right password (\(problem.rawValue, privacy: .public))")
+            log.notice("Stream request from \(UDP.string(address.sin_addr)) without the right password (\(problem.rawValue))")
         }
         UDP.send(fd, StreamWire.control(.status, StreamWire.Status(host: host, sharing: false, password: problem)), to: address)
     }
@@ -100,7 +100,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         String(String.UnicodeScalarView(host.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(63)))
     }
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "stream")
+    private let log = ThunerLogger("stream")
 
     func start() {
         guard fd < 0 else { return }
@@ -194,7 +194,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
             guard UDP.isLoopback(sender.sin_addr) || isKnownPeer?(sender.sin_addr) == true else {
                 if Date().timeIntervalSince(lastIgnoredLog) > 10 {
                     lastIgnoredLog = Date()
-                    log.notice("Ignoring stream messages from \(key, privacy: .public): not a ThUNER found over Bonjour")
+                    log.notice("Ignoring stream messages from \(key): not a ThUNER found over Bonjour")
                 }
                 return nil
             }
@@ -232,7 +232,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                         listeners[key] = listener
                         if moved { listenersChanged() }
                     } else {
-                        log.notice("\(request.host, privacy: .public) (\(key, privacy: .public)) started listening (\(request.method.rawValue, privacy: .public))")
+                        log.notice("\(request.host) (\(key)) started listening (\(request.method.rawValue))")
                         listeners[key] = Listener(address: sender, host: request.host, method: request.method, lastSeen: Date())
                         listenersChanged()
                     }
@@ -245,7 +245,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
                 reply(StreamWire.control(.status, status), to: sender)
             case .unsubscribe:
                 if let gone = listeners.removeValue(forKey: key) {
-                    log.notice("\(gone.host, privacy: .public) stopped listening")
+                    log.notice("\(gone.host) stopped listening")
                     listenersChanged()
                 }
             case .resend:
@@ -277,7 +277,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
         let stale = listeners.filter { Date().timeIntervalSince($0.value.lastSeen) > 4 }
         guard !stale.isEmpty else { return }
         for (key, listener) in stale {
-            log.notice("Lost \(listener.host, privacy: .public)")
+            log.notice("Lost \(listener.host)")
             listeners[key] = nil
         }
         listenersChanged()
@@ -399,7 +399,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
     @MainActor var isQuiet: Bool { fd >= 0 && output == nil && error == nil && status?.sharing == true }
     private let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     private let network = DispatchQueue(label: "com.idallas.thuner.stream-receive", qos: .userInteractive)
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "stream")
+    private let log = ThunerLogger("stream")
 
     /// The stream password's cipher, if one is set (the sender has to have the same one).
     let cipher: StreamCipher?
@@ -438,7 +438,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
         subscribeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.subscribe() }
         }
-        log.notice("Listening to \(self.sourceHost, privacy: .public) (\(self.settings.method.rawValue, privacy: .public))")
+        log.notice("Listening to \(self.sourceHost) (\(self.settings.method.rawValue))")
     }
 
     @MainActor func stop() {
@@ -509,7 +509,7 @@ final class AudioStreamReceiver: @unchecked Sendable {
                 // It answers from another of its addresses: its primary connection. Ask there from now on.
                 target.withLock { $0.sin_addr = sender.sin_addr }
                 let from = UDP.string(current.sin_addr), to = UDP.string(sender.sin_addr)
-                log.notice("The stream's source sends from \(to, privacy: .public), not \(from, privacy: .public); following it")
+                log.notice("The stream's source sends from \(to), not \(from); following it")
             }
             func handle(_ bytes: UnsafeRawBufferPointer) {
                 let n = bytes.count
@@ -642,11 +642,11 @@ final class AudioStreamReceiver: @unchecked Sendable {
             error = nil
             watch(deviceID)
             logAudioActivity()
-            log.notice("Stream output started: \(sampleRate) Hz stream to \(outputRate) Hz output, channel \(self.settings.outputChannel + 1), \(self.settings.method.rawValue, privacy: .public), margin \(self.settings.marginMs) ms, I/O buffer \(tap.ioBufferFrames) frames")
+            log.notice("Stream output started: \(sampleRate) Hz stream to \(outputRate) Hz output, channel \(self.settings.outputChannel + 1), \(self.settings.method.rawValue), margin \(self.settings.marginMs) ms, I/O buffer \(tap.ioBufferFrames) frames")
         } catch {
             self.error = "Couldn't start the output: \(error.localizedDescription)"
             outputFailedAt = Date()
-            log.error("Couldn't start the stream output: \(error.localizedDescription, privacy: .public)")
+            log.error("Couldn't start the stream output: \(error.localizedDescription)")
         }
         onChange?()
     }

@@ -51,7 +51,7 @@ final class SystemAudioTap {
     let format: AVAudioFormat
     private var ioProc: AudioDeviceIOProcID?
     private let ioQueue = DispatchQueue(label: "com.idallas.thuner.system-audio", qos: .userInteractive)
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "capture")
+    private let log = ThunerLogger("capture")
 
     /// - Parameter processes: the Core Audio process objects to capture (`.only`) or leave out (`.all`, `.except`).
     init(mode: Mode = .all, processes: [AudioObjectID] = []) throws {
@@ -118,7 +118,7 @@ final class SystemAudioTap {
         deviceID = device
         self.outputID = outputID
         self.format = format
-        log.notice("System audio tap ready: \(format.channelCount) ch @ \(format.sampleRate) Hz (tap says \(tapRate) Hz)\(format.isInterleaved ? " interleaved" : "", privacy: .public)")
+        log.notice("System audio tap ready: \(format.channelCount) ch @ \(format.sampleRate) Hz (tap says \(tapRate) Hz)\(format.isInterleaved ? " interleaved" : "")")
     }
 
     /// Starts reading the tap; `handler` gets each buffer (non-interleaved float) on a background queue.

@@ -284,6 +284,9 @@ final class AppModel {
     @ObservationIgnored let webDisplay = WebDisplayServer()
 
     private func startWebDisplay() {
+        webDisplay.activityProvider = { after, level, limit in ActivityStore.shared.entries(after: after, level: level, limit: limit) }
+        let web = webDisplay
+        ActivityStore.shared.onEntry = { entry in web.activityEvent(entry) }
         webDisplay.start(port: WebDisplayServer.defaultPort, localOnly: webDisplayLocalOnly)
     }
 
@@ -893,6 +896,14 @@ final class AppModel {
     /// How another Mac's name is shown. `open Thuner.app --args -peerDisplayName "Mac mini"` shows every other
     /// Mac under that name instead, for screenshots that shouldn't carry real machine names. Display only:
     /// settings and connections use the real names.
+    /// The IPv4 address of another ThUNER (a name from `otherThuners`), for its HTTP API.
+    func addressOfThuner(_ host: String) -> String? {
+        guard var address = peers.address(ofHost: host) else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &address, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+        return String(cString: buffer)
+    }
+
     nonisolated static func shown(_ host: String) -> String {
         guard host != streamThisMac,
               let alias = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["peerDisplayName"] as? String,
@@ -941,7 +952,7 @@ final class AppModel {
     private var lastHeartbeat = Date.distantPast
     private var lastUILevelUpdate = Date.distantPast
     private let defaults = UserDefaults.standard
-    private let logger = Logger(subsystem: "com.idallas.thuner", category: "app")
+    private let logger = ThunerLogger("app")
 
     init() {
         let d = UserDefaults.standard
@@ -1006,7 +1017,7 @@ final class AppModel {
                 streamLog = try JSONDecoder().decode(StreamLog.self, from: data)
             } catch {
                 // As with History: keep a log we couldn't read rather than let the next save replace it.
-                logger.error("Couldn't read the stream log: \(error, privacy: .public)")
+                logger.error("Couldn't read the stream log: \(error)")
                 let aside = Self.streamLogURL.deletingLastPathComponent()
                     .appendingPathComponent("stream-log-unreadable-\(Int(Date().timeIntervalSince1970)).json")
                 try? FileManager.default.moveItem(at: Self.streamLogURL, to: aside)
@@ -1048,7 +1059,7 @@ final class AppModel {
         // The Tuneshine keeps showing Thuner's last image across a relaunch, so show it here too (no re-push).
         if let data = d.data(forKey: "lastDisplayed"), let track = try? JSONDecoder().decode(Track.self, from: data) {
             machine.displayedExternally(track)
-            logger.notice("Restored last cover: \(track.displayName, privacy: .public)")
+            logger.notice("Restored last cover: \(track.displayName)")
             clearAfterQuietSince = Date()
         }
 
@@ -1105,7 +1116,7 @@ final class AppModel {
             let data = source == .nowPlaying ? self?.players.nowPlayingArtwork : await PlayerControl.currentArtwork(source)
             guard let data,
                   let name = await Task.detached(operation: { LocalArtwork.save(data) }).value else { return nil }
-            self?.logger.notice("Cover from \(source.rawValue, privacy: .public) itself (not in Apple's catalogue search)")
+            self?.logger.notice("Cover from \(source.rawValue) itself (not in Apple's catalogue search)")
             return self?.localArtworkURL(name)
         }
         players.start()
@@ -1526,7 +1537,7 @@ final class AppModel {
             if stats != streamStats { streamStats = stats }
             if let stats, now.timeIntervalSince(lastStreamLog) >= 10 {
                 lastStreamLog = now
-                logger.notice("Stream \(stats.method.rawValue, privacy: .public): \(stats.playing ? "playing" : "waiting", privacy: .public), buffer \(String(format: "%.2f", stats.bufferedMs), privacy: .public)/\(String(format: "%.2f", stats.targetMs), privacy: .public) ms, jitter \(String(format: "%.2f", stats.jitterMs), privacy: .public) ms, drift \(String(format: "%+.1f", stats.driftPPM), privacy: .public) ppm, \(stats.received) received, \(stats.lost) lost, \(stats.late) late, \(stats.underruns) dropouts, \(stats.adjustments) corrections")
+                logger.notice("Stream \(stats.method.rawValue): \(stats.playing ? "playing" : "waiting"), buffer \(String(format: "%.2f", stats.bufferedMs))/\(String(format: "%.2f", stats.targetMs)) ms, jitter \(String(format: "%.2f", stats.jitterMs)) ms, drift \(String(format: "%+.1f", stats.driftPPM)) ppm, \(stats.received) received, \(stats.lost) lost, \(stats.late) late, \(stats.underruns) dropouts, \(stats.adjustments) corrections")
             }
         }
         updateCapture()
@@ -1674,7 +1685,7 @@ final class AppModel {
                            group: definition.group, channels: definition.meterChannels, readOnly: definition.readOnly)
         })
         provider.onWatchedMetersChange = { [weak self] meters in
-            self?.logger.notice("Meters wanted: \(meters.sorted().joined(separator: ", "), privacy: .public)")
+            self?.logger.notice("Meters wanted: \(meters.sorted().joined(separator: ", "))")
             self?.updateLevelPolling()
         }
         provider.onTurn = { [weak self] turn in
@@ -2138,7 +2149,7 @@ final class AppModel {
                 try await service.flush()
             } catch {
                 let name = await service.displayName
-                logger.notice("\(name, privacy: .public) flush failed: \(error.localizedDescription, privacy: .public)")
+                logger.notice("\(name) flush failed: \(error.localizedDescription)")
             }
         }
         await refreshLastFMStatus()
@@ -2181,7 +2192,7 @@ final class AppModel {
             let file = try AVAudioFile(forWriting: url, settings: format.settings)
             try file.write(from: buffer)
         } catch {
-            Logger(subsystem: "com.idallas.thuner", category: "app").error("Couldn't save the missed clip: \(error.localizedDescription, privacy: .public)")
+            ThunerLogger("app").error("Couldn't save the missed clip: \(error.localizedDescription)")
         }
     }
 
@@ -2316,7 +2327,7 @@ final class AppModel {
     }
 
     private func note(_ text: String) {
-        logger.notice("\(text, privacy: .public)")
+        logger.activity(text)
         log.insert(LogEntry(date: Date(), text: text), at: 0)
         if log.count > 50 { log.removeLast(log.count - 50) }
     }

@@ -8,7 +8,7 @@ import os
 final class Matcher: @unchecked Sendable {
     private let session = SHSession()
     private let lookup = TrackInfoLookup()
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "match")
+    private let log = ThunerLogger("match")
 
     func match(samples: [Float], sampleRate: Double) async -> MatchOutcome {
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
@@ -48,7 +48,7 @@ final class Matcher: @unchecked Sendable {
         case .noMatch:
             return .noMatch
         case .error(let error, _):
-            log.error("ShazamKit error: \(String(describing: error), privacy: .public)")
+            log.error("ShazamKit error: \(String(describing: error))")
             return .error(error.localizedDescription)
         }
     }

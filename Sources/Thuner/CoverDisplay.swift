@@ -36,7 +36,7 @@ struct TuneshineDisplay: CoverDisplay {
 
     /// e.g. "tuneshine-1a2b.local" or an IP address.
     let host: String
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "tuneshine")
+    private let log = ThunerLogger("tuneshine")
 
     func show(_ track: Track) async throws {
         var body: [String: Any] = [
@@ -52,7 +52,7 @@ struct TuneshineDisplay: CoverDisplay {
         // any size.
         if let url = track.artworkURL, let webpURL = Self.webpArtworkURL(url), let webp = await Self.download(webpURL) {
             try await upload(webp, metadata: body)
-            log.notice("Uploaded \(track.displayName, privacy: .public)")
+            log.notice("Uploaded \(track.displayName)")
             return
         }
 
@@ -70,11 +70,11 @@ struct TuneshineDisplay: CoverDisplay {
         for attempt in 1...3 {
             _ = try await send("POST", path: "/image", body: body)
             guard let error = try await lastImageError() else {
-                log.notice("Pushed \(track.displayName, privacy: .public) (attempt \(attempt))")
+                log.notice("Pushed \(track.displayName) (attempt \(attempt))")
                 return
             }
             lastError = error
-            log.error("Tuneshine image load failed (\(error, privacy: .public)), attempt \(attempt)")
+            log.error("Tuneshine image load failed (\(error)), attempt \(attempt)")
             try await Task.sleep(for: .seconds(2))
         }
         throw TuneshineError.imageFailed(lastError)

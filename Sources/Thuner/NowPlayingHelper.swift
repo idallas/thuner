@@ -30,7 +30,7 @@ final class NowPlayingHelper {
     private var buffer = Data()
     private var wanted = false
     private var failures = 0
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "players")
+    private let log = ThunerLogger("players")
 
     /// The helper library, inside the app (not there for `swift run`: Scripts/build-app.sh builds it).
     private var libraryURL: URL? {
@@ -95,7 +95,7 @@ final class NowPlayingHelper {
         do {
             try process.run()
         } catch {
-            log.error("Couldn't start the Now Playing helper: \(error.localizedDescription, privacy: .public)")
+            log.error("Couldn't start the Now Playing helper: \(error.localizedDescription)")
             return
         }
         self.process = process
@@ -114,14 +114,14 @@ final class NowPlayingHelper {
                 failures = 0
                 log.notice("Now Playing helper running")
             } else if let error = object["error"] as? String {
-                log.error("Now Playing helper: \(error, privacy: .public)")
+                log.error("Now Playing helper: \(error)")
             } else if let command = object["command"] as? String {
-                if object["ok"] as? Bool != true { log.notice("Now Playing: \(command, privacy: .public) wasn't taken") }
+                if object["ok"] as? Bool != true { log.notice("Now Playing: \(command) wasn't taken") }
             } else {
                 do {
                     onReport?(try JSONDecoder().decode(Report.self, from: Data(line)))
                 } catch {
-                    log.error("Now Playing helper sent something unreadable: \(error.localizedDescription, privacy: .public)")
+                    log.error("Now Playing helper sent something unreadable: \(error.localizedDescription)")
                 }
             }
         }

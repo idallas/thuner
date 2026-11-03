@@ -19,7 +19,7 @@ final class TuneshineBrowser: NSObject {
 
     private let browser = NetServiceBrowser()
     private var resolving: [NetService] = []
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "tuneshine")
+    private let log = ThunerLogger("tuneshine")
 
     func start() {
         browser.delegate = self
@@ -44,7 +44,7 @@ final class TuneshineBrowser: NSObject {
             devices[i] = device
         } else {
             devices.append(device)
-            log.notice("Found Tuneshine \(device.name, privacy: .public) at \(device.host, privacy: .public)")
+            log.notice("Found Tuneshine \(device.name) at \(device.host)")
         }
         onChange?()
     }

@@ -8,11 +8,11 @@ import os
 enum MatchFileDiagnostic {
     static func runIfAsked() {
         guard let list = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["matchFile"] as? String else { return }
-        let log = Logger(subsystem: "com.idallas.thuner", category: "diagnostic")
+        let log = ThunerLogger("diagnostic")
         Task.detached {
             let matcher = Matcher()
             for path in list.split(separator: ",").map(String.init) {
-                guard let samples = mono48k(path) else { log.error("matchFile: couldn't read \(path, privacy: .public)"); continue }
+                guard let samples = mono48k(path) else { log.error("matchFile: couldn't read \(path)"); continue }
                 let name = (path as NSString).lastPathComponent
                 // As if the capture got the speed wrong: play it back as if it had been recorded at another rate.
                 for factor in [44_100.0 / 48_000, 48_000.0 / 44_100, 0.5, 2.0, 88_200.0 / 48_000, 48_000.0 / 88_200] where samples.count <= 480_000 {
@@ -24,7 +24,7 @@ enum MatchFileDiagnostic {
                     case .noMatch: "no match"
                     case .error(let e): "error \(e)"
                     }
-                    log.notice("matchFile \(name, privacy: .public) as \(Int(48_000 * factor)) Hz: \(result, privacy: .public)")
+                    log.notice("matchFile \(name) as \(Int(48_000 * factor)) Hz: \(result)")
                 }
                 for start in stride(from: 0, through: max(samples.count - 480_000, 0), by: 240_000) {
                     let window = Array(samples[start..<min(start + 480_000, samples.count)])
@@ -34,7 +34,7 @@ enum MatchFileDiagnostic {
                     case .noMatch: "no match"
                     case .error(let e): "error \(e)"
                     }
-                    log.notice("matchFile \(name, privacy: .public) \(start / 48_000) s: \(result, privacy: .public)")
+                    log.notice("matchFile \(name) \(start / 48_000) s: \(result)")
                 }
             }
         }

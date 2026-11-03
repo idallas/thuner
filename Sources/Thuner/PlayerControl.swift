@@ -84,7 +84,7 @@ enum PlayerControl {
     /// AppleScript runs on its own queue: the first use shows macOS's permission prompt and waits for an answer,
     /// which mustn't hold up the panel.
     private static let queue = DispatchQueue(label: "com.idallas.thuner.player-control", qos: .userInitiated)
-    private static let log = Logger(subsystem: "com.idallas.thuner", category: "players")
+    private static let log = ThunerLogger("players")
 
     /// The current track's cover, straight from the Music app, for tracks Apple's catalogue search can't find.
     /// Only when ThUNER may already control Music (granted through the playback buttons): this never asks.
@@ -164,7 +164,7 @@ enum PlayerControl {
                     let code = error[NSAppleScript.errorNumber] as? Int ?? 0
                     outcome = code == Int(errAEEventNotPermitted) ? .notAllowed
                         : .failed(error[NSAppleScript.errorMessage] as? String ?? "error \(code)")
-                    log.error("\(command.rawValue, privacy: .public) to \(source.rawValue, privacy: .public) failed: \(code)")
+                    log.error("\(command.rawValue) to \(source.rawValue) failed: \(code)")
                 } else {
                     outcome = .done
                 }
@@ -180,7 +180,7 @@ enum PlayerControl {
     /// permission (its prompt leads to System Settings) and this reports `.notAllowed` until it's granted.
     private static func pressMediaKey(_ command: Command) -> Outcome {
         guard mayPressKeys || CGRequestPostEventAccess() else {
-            log.notice("\(command.rawValue, privacy: .public) by media key: no Accessibility permission")
+            log.notice("\(command.rawValue) by media key: no Accessibility permission")
             return .notAllowed
         }
         for down in [true, false] {

@@ -77,6 +77,7 @@ struct MenuView: View {
                     model.radioMode.toggle()
                 },
                 .separator,
+                .init(title: "Activity…") { open(.activity) },
                 .init(title: "History…") { open(.history) },
                 .init(title: "Stream…") { open(.stream) },
                 .init(title: "Settings…") { open(.settings) },
@@ -370,7 +371,7 @@ struct MenuView: View {
     private var activity: some View {
         DisclosureGroup(isExpanded: $activityExpanded) {
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(model.log.prefix(6)) { entry in
+                ForEach(model.log.prefix(3)) { entry in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(entry.date, format: .dateTime.hour().minute().second())
                             .foregroundStyle(.tertiary).monospacedDigit()
@@ -382,7 +383,17 @@ struct MenuView: View {
             .padding(.top, 4)
             .allowsHitTesting(false)
         } label: {
-            Text("Activity").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            HStack {
+                Text("Activity").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                Spacer()
+                // The whole log, this Mac's or another's, in a window of its own.
+                Button { open(.activity) } label: {
+                    Image(systemName: "list.bullet.rectangle").font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .focusable(false)
+                .help("Open the Activity window: everything ThUNER says and does, here or on another Mac")
+            }
         }
     }
 

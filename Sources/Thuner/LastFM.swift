@@ -60,7 +60,7 @@ actor LastFM: ScrobbleService {
     }
 
     private static let endpoint = URL(string: "https://ws.audioscrobbler.com/2.0/")!
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "lastfm")
+    private let log = ThunerLogger("lastfm")
     private let queueURL: URL
 
     private(set) var credentials: Credentials?
@@ -115,7 +115,7 @@ actor LastFM: ScrobbleService {
         self.session = session
         pendingToken = nil
         Keychain.write(session, account: "lastfm-session")
-        log.notice("Connected to Last.fm as \(name, privacy: .public)")
+        log.notice("Connected to Last.fm as \(name)")
         return session
     }
 
@@ -166,13 +166,13 @@ actor LastFM: ScrobbleService {
             do {
                 let response = try await call("track.scrobble", params, signed: true, post: true)
                 let accepted = ((response["scrobbles"] as? [String: Any])?["@attr"] as? [String: Any])?["accepted"]
-                log.notice("Scrobbled \(batch.count) (accepted: \(String(describing: accepted), privacy: .public))")
+                log.notice("Scrobbled \(batch.count) (accepted: \(String(describing: accepted)))")
             } catch let error as LastFMError where error.isAuthFailure {
                 disconnect()
                 throw error
             } catch let error as LastFMError where !error.isTemporary {
                 // Last.fm rejected the batch outright (bad parameters); retrying won't help.
-                log.error("Dropping \(batch.count) scrobbles: \(error.localizedDescription, privacy: .public)")
+                log.error("Dropping \(batch.count) scrobbles: \(error.localizedDescription)")
             }
             // URLError and temporary errors propagate here, leaving the batch queued.
             queue.removeFirst(batch.count)

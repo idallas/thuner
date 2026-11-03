@@ -94,7 +94,7 @@ actor ListenBrainzService: ScrobbleService {
     nonisolated let id: String
     private(set) var config: Config
     private var queue: ScrobbleQueue
-    private let log = Logger(subsystem: "com.idallas.thuner", category: "listenbrainz")
+    private let log = ThunerLogger("listenbrainz")
 
     init(config: Config) {
         self.config = config
@@ -174,10 +174,10 @@ actor ListenBrainzService: ScrobbleService {
             let batch = Array(queue.items.prefix(100))
             do {
                 try await submit(listenType: batch.count == 1 ? "single" : "import", payload: batch.map(Self.metadata))
-                log.notice("\(self.config.name, privacy: .public): sent \(batch.count) listen(s)")
+                log.notice("\(self.config.name): sent \(batch.count) listen(s)")
             } catch let error as ServiceError where !error.isTemporary {
                 if case .invalidToken = error { throw error }  // keep them queued until the token's fixed
-                log.error("\(self.config.name, privacy: .public): dropping \(batch.count) listen(s): \(error.localizedDescription, privacy: .public)")
+                log.error("\(self.config.name): dropping \(batch.count) listen(s): \(error.localizedDescription)")
             }
             // Network errors and temporary server errors propagate above, leaving the batch queued.
             queue.removeFirst(batch.count)
