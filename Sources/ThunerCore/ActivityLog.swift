@@ -33,7 +33,7 @@ public enum ActivityLog {
         }
 
         /// About how much room the entry takes in the file.
-        var bytes: Int { message.utf8.count + category.utf8.count + 48 }
+        public var bytes: Int { message.utf8.count + category.utf8.count + 48 }
     }
 
     // MARK: Keeping

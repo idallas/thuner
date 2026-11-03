@@ -69,6 +69,10 @@ final class ActivityStore: @unchecked Sendable {
     private var nextID = 1
     private var pendingForUI: [ActivityLog.Entry] = []
     private var flushScheduled = false
+    /// About what's in memory, so a flood of lines (anything on the LAN can cause some) is trimmed as it
+    /// happens rather than at the next hour.
+    private var approxBytes = 0
+    private var trimQueued = false
     private var loaded = false
     private let queue = DispatchQueue(label: "com.idallas.thuner.activity", qos: .utility)
     private var handle: FileHandle?
@@ -91,6 +95,7 @@ final class ActivityStore: @unchecked Sendable {
             for i in all.indices { all[i].id = i + 1 }
             entries = all
             nextID = all.count + 1
+            approxBytes = all.reduce(0) { $0 + $1.bytes }
             pendingForUI.removeAll()
             lock.unlock()
             trimLocked(rewrite: true)
@@ -109,11 +114,15 @@ final class ActivityStore: @unchecked Sendable {
         nextID += 1
         entries.append(entry)
         pendingForUI.append(entry)
+        approxBytes += entry.bytes
         let schedule = !flushScheduled
         flushScheduled = true
+        let trim = approxBytes > ActivityLog.maxBytes * 3 / 2 && !trimQueued
+        if trim { trimQueued = true }
         let onEntry = _onEntry
         lock.unlock()
         queue.async { [self] in append(entry) }
+        if trim { queue.async { [self] in trimLocked(rewrite: false) } }
         if schedule {
             // Many lines can arrive in a burst (launch, a stream starting); the window hears about them together.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [self] in flushToFeed() }
@@ -167,6 +176,8 @@ final class ActivityStore: @unchecked Sendable {
         let kept = ActivityLog.trimmed(entries)
         let dropped = kept.count != before
         if dropped { entries = kept; pendingForUI.removeAll() }
+        approxBytes = kept.reduce(0) { $0 + $1.bytes }
+        trimQueued = false
         lock.unlock()
         guard dropped || rewrite else { return }
         let text = kept.map(ActivityLog.line(for:)).joined(separator: "\n") + (kept.isEmpty ? "" : "\n")

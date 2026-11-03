@@ -115,7 +115,7 @@ struct ActivityWindowView: View {
                     .controlSize(.small)
                 Button("Change Token…") { remote.forgetToken(for: mac) }.controlSize(.small)
             } else if remote.connected {
-                Label("\(AppModel.shown(mac))'s activity, live", systemImage: "dot.radiowaves.left.and.right")
+                Label("\(AppModel.shown(mac))'s activity, live, from \(remote.address)", systemImage: "dot.radiowaves.left.and.right")
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Change Token…") { remote.forgetToken(for: mac) }.controlSize(.small)
@@ -132,6 +132,10 @@ struct ActivityWindowView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(AppModel.shown(mac))'s Control API token").font(.headline)
             Text("Its activity log names tracks, accounts and addresses, so ThUNER only hands it over with the token from that Mac's Settings → Controls → Control API. It's kept in this Mac's Keychain.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // The token also controls that Mac, and it goes to whatever address Bonjour gave for the name, over
+            // plain HTTP on the LAN: say which, so a wrong one can be spotted.
+            Text("It will be sent to \(AppModel.shown(mac)) at \(model.addressOfThuner(mac) ?? "an address not found yet") over the local network.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             SecureField("Token", text: $tokenDraft)
                 .textFieldStyle(.roundedBorder)
@@ -320,6 +324,8 @@ final class RemoteActivity {
     private(set) var connected = false
     private(set) var problem: String?
     private(set) var needsToken = false
+    /// Where the log is being fetched from, shown so a wrong address can be spotted.
+    private(set) var address = ""
     private var host = ""
 
     private static func account(_ host: String) -> String { "activity-token-\(host.lowercased())" }
@@ -350,6 +356,7 @@ final class RemoteActivity {
             problem = "\(AppModel.shown(host)) hasn't been found on the network yet."
             return
         }
+        self.address = address
         let base = "http://\(address):\(WebDisplayServer.defaultPort)"
         while !Task.isCancelled {
             do {
@@ -375,6 +382,15 @@ final class RemoteActivity {
 
     private enum RemoteError: Error { case unauthorized, http(Int) }
 
+    /// The other Mac's lines are its own to make up: keep each to a sane length.
+    private static func bounded(_ entry: ActivityLog.Entry) -> ActivityLog.Entry {
+        guard entry.message.count > 2000 || entry.category.count > 40 else { return entry }
+        var cut = entry
+        cut.message = String(entry.message.prefix(2000)) + "…"
+        cut.category = String(entry.category.prefix(40))
+        return cut
+    }
+
     private static func describe(_ error: Error, host: String) -> String {
         if case RemoteError.http(let code) = error { return "\(AppModel.shown(host)) answered HTTP \(code)." }
         let text = error.localizedDescription
@@ -396,7 +412,7 @@ final class RemoteActivity {
         guard status == 200 else { throw RemoteError.http(status) }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let items = json?["entries"] as? [[String: Any]] ?? []
-        entries = items.compactMap(WebDisplayServer.entry(from:))
+        entries = items.prefix(5000).compactMap(WebDisplayServer.entry(from:)).map(Self.bounded)
     }
 
     private func stream(base: String, token: String) async throws {
@@ -413,7 +429,7 @@ final class RemoteActivity {
             guard json?["type"] as? String == "activity", let item = json?["entry"] as? [String: Any],
                   let entry = WebDisplayServer.entry(from: item) else { continue }
             if let last = entries.last, entry.id <= last.id { continue }
-            entries.append(entry)
+            entries.append(Self.bounded(entry))
             if entries.count > 20_000 { entries.removeFirst(entries.count - 20_000) }
         }
     }

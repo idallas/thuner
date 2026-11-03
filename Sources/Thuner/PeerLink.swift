@@ -70,6 +70,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
     private var services: [String: NetService] = [:]
     private var lastRefresh = Date.distantPast
     private var peers: [String: [sockaddr_in]] = [:]
+    private var lastIgnoredLog = Date.distantPast
     /// Lookups tried so far per service, while it's still around (cleared when it goes).
     private var resolveAttempts: [String: Int] = [:]
     /// Ids of recently handled messages.
@@ -237,7 +238,11 @@ final class PeerLink: NSObject, @unchecked Sendable {
         guard sender.sin_family == sa_family_t(AF_INET), isKnownPeer(sender.sin_addr) else {
             // Our own broadcast, heard back from this Mac's other address (Ethernet and Wi-Fi both up).
             if Self.isOwnAddress(sender.sin_addr) { return }
-            log.notice("Ignoring a message from \(Self.string(sender.sin_addr)): not a ThUNER found over Bonjour")
+            // One line per 10 s: anything on the LAN can send these, and each line goes in the activity log.
+            if Date().timeIntervalSince(lastIgnoredLog) > 10 {
+                lastIgnoredLog = Date()
+                log.notice("Ignoring messages from \(Self.string(sender.sin_addr)): not a ThUNER found over Bonjour")
+            }
             refreshAddresses()
             return
         }
