@@ -235,6 +235,8 @@ final class PeerLink: NSObject, @unchecked Sendable {
         }
         guard n > 0 else { return }
         guard sender.sin_family == sa_family_t(AF_INET), isKnownPeer(sender.sin_addr) else {
+            // Our own broadcast, heard back from this Mac's other address (Ethernet and Wi-Fi both up).
+            if Self.isOwnAddress(sender.sin_addr) { return }
             log.notice("Ignoring a message from \(Self.string(sender.sin_addr), privacy: .public): not a ThUNER found over Bonjour")
             refreshAddresses()
             return
@@ -255,6 +257,22 @@ final class PeerLink: NSObject, @unchecked Sendable {
 extension PeerLink {
     func isKnownPeer(_ address: in_addr) -> Bool {
         peers.values.contains { $0.contains { $0.sin_addr.s_addr == address.s_addr } }
+    }
+
+    /// Whether `address` belongs to one of this Mac's own network interfaces.
+    static func isOwnAddress(_ address: in_addr) -> Bool {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0 else { return false }
+        defer { freeifaddrs(list) }
+        var next = list
+        while let entry = next {
+            if let addr = entry.pointee.ifa_addr, addr.pointee.sa_family == sa_family_t(AF_INET) {
+                let own = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr }
+                if own == address.s_addr { return true }
+            }
+            next = entry.pointee.ifa_next
+        }
+        return false
     }
 
     /// Looks every ThUNER up again, at most every 30 seconds: a message from an address we don't know may be a

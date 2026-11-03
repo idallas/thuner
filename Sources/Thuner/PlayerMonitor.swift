@@ -114,9 +114,16 @@ final class PlayerMonitor {
         var track = Track(title: title, artist: artist, album: album?.isEmpty == false ? album : nil)
         if let duration = report.duration, duration > 0 { track.duration = duration }
         if let artwork = report.artwork { nowPlayingArtwork = Data(base64Encoded: artwork) }
+        // Radio apps (KCRW, over AirPlay) put the show in the title and "Song - Artist" in the artist field; the
+        // catalogue decides which way round, if either.
+        let readings = track.splittingArtist()
+        // macOS's AirPlay receiver lives in Control Center.
+        let site = app?.bundleID == Self.airPlayBundleID ? "AirPlay" : app?.name ?? "Now Playing"
         update(.nowPlaying, track: track, playing: report.playing, position: report.position,
-               site: app?.name ?? "Now Playing", appBundleID: app?.bundleID)
+               site: site, appBundleID: app?.bundleID, readings: readings)
     }
+
+    static let airPlayBundleID = "com.apple.controlcenter"
 
     /// A website that went quiet without saying so (its tab closed, the browser quit): Web Scrobbler sends nothing
     /// then, so a play ends once the song should have finished, plus a little, or after 10 minutes without a length.
@@ -162,13 +169,14 @@ final class PlayerMonitor {
     @discardableResult
     private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?,
                         site: String? = nil, siteArtwork: URL? = nil,
-                        browser: WebScrobblerEvent.Browser? = nil, appBundleID: String? = nil) -> Task<Void, Never>? {
+                        browser: WebScrobblerEvent.Browser? = nil, appBundleID: String? = nil,
+                        readings: [Track] = []) -> Task<Void, Never>? {
         guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
         // Same track as before (play/pause): keep the artwork we already found.
-        if let previous, previous.track.isSameSong(as: track) {
-            var t = track
+        if let previous, let same = ([track] + readings).first(where: previous.track.isSameSong) {
+            var t = same
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
             t.duration = t.duration ?? previous.track.duration
@@ -178,11 +186,23 @@ final class PlayerMonitor {
         }
         log.notice("\(site ?? source.rawValue, privacy: .public): \(playing ? "playing" : "paused", privacy: .public) \(track.displayName, privacy: .public)")
         return Task {
-            let found = await artwork.find(for: track)
+            var track = track
+            var found = await artwork.find(for: track)
+            if found.appleMusicID == nil {
+                for reading in readings {
+                    let other = await artwork.find(for: reading)
+                    guard other.appleMusicID != nil || other.url != nil else { continue }
+                    log.notice("\(site ?? source.rawValue, privacy: .public): reading it as \(reading.displayName, privacy: .public)")
+                    track = reading
+                    found = other
+                    break
+                }
+            }
             // Browsers also report videos, talks and trailers through Now Playing (the "artist" is the channel): from
-            // a browser, only follow what looks like music, a track with an album or one Apple's catalogue knows.
-            // Music apps (VOX, VLC with an artist) count whatever they play.
-            if source == .nowPlaying, appBundleID.map(WebScrobblerEvent.Browser.allBundleIDs.contains) ?? true,
+            // a browser or AirPlay (a phone's podcast or video), only follow what looks like music, a track with an
+            // album or one Apple's catalogue knows. Music apps (VOX, VLC with an artist) count whatever they play.
+            if source == .nowPlaying,
+               appBundleID.map { WebScrobblerEvent.Browser.allBundleIDs.contains($0) || $0 == Self.airPlayBundleID } ?? true,
                track.album == nil, found.appleMusicID == nil {
                 log.notice("\(site ?? source.rawValue, privacy: .public): \(track.displayName, privacy: .public) doesn't look like music; ignoring it")
                 if let current = latest[source], current.isPlaying {

@@ -38,6 +38,20 @@ public struct Track: Equatable, Sendable, Codable {
 
     public var displayName: String { "\(artist) – \(title)" }
 
+    /// An artist field like "Song - Artist", read both ways round, with the title (a radio show's name) dropped.
+    public func splittingArtist() -> [Track] {
+        guard let range = artist.range(of: " - ") else { return [] }
+        let left = artist[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        let right = artist[range.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard !left.isEmpty, !right.isEmpty else { return [] }
+        return [(left, right), (right, left)].map { song, by in
+            var reading = self
+            reading.title = song
+            reading.artist = by
+            return reading
+        }
+    }
+
     /// The individual artists in a credit like "A & B", "A feat. B", "A, B" or "A x B", normalized.
     public static func artistNames(_ credit: String) -> Set<String> {
         var s = " " + credit.lowercased() + " "
