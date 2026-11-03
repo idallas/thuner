@@ -250,11 +250,17 @@ struct MenuView: View {
                 micOff(reason)
             } else {
                 LiveLevelMeter(model: model)
-                HStack(spacing: 8) {
-                    Text("Silence").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
-                    Slider(value: $model.thresholdDB, in: -80...(-10), step: 1).controlSize(.mini).focusable(false)
-                    Text("\(Int(model.thresholdDB)) dB").font(.system(size: 11)).monospacedDigit()
-                        .foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
+                if model.usingSystemAudio {
+                    // No noise floor to set a line above: anything playing counts.
+                    Text("Silence: only when nothing plays").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .help("System Audio is exactly silent when nothing plays, so the silence level for a microphone or turntable doesn't apply.")
+                } else {
+                    HStack(spacing: 8) {
+                        Text("Silence").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
+                        Slider(value: $model.thresholdDB, in: -80...(-10), step: 1).controlSize(.mini).focusable(false)
+                        Text("\(Int(model.thresholdDB)) dB").font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
+                    }
                 }
                 if let notice = model.captureNotice {
                     Label(notice, systemImage: "hourglass").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -449,7 +455,7 @@ struct LiveLevelMeter: View {
     let model: AppModel
 
     var body: some View {
-        LevelMeter(levelDB: model.levelDB, thresholdDB: model.thresholdDB, open: model.gateOpen)
+        LevelMeter(levelDB: model.levelDB, thresholdDB: model.silenceThresholdDB, open: model.gateOpen)
     }
 }
 

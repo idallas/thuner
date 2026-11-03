@@ -27,10 +27,11 @@ final class AppModel {
             save(inputDeviceUID, "inputDeviceUID")
             // A channel pair picked for one interface means nothing on another.
             if firstChannel != 0, oldValue != inputDeviceUID { firstChannel = 0 } else { restartCapture() }
+            gate.thresholdDB = silenceThresholdDB
         }
     }
     var firstChannel: Int { didSet { save(firstChannel, "firstChannel"); restartCapture() } }
-    var thresholdDB: Double { didSet { save(thresholdDB, "thresholdDB"); gate.thresholdDB = thresholdDB } }
+    var thresholdDB: Double { didSet { save(thresholdDB, "thresholdDB"); gate.thresholdDB = silenceThresholdDB } }
     var role: PushArbiter.Role { didSet { save(role.rawValue, "role"); arbiter.role = role } }
     /// 0 keeps the last cover up indefinitely.
     var idleImageMinutes: Double { didSet { save(idleImageMinutes, "idleImageMinutes"); applyTiming() } }
@@ -582,6 +583,12 @@ final class AppModel {
 
     var usingSystemAudio: Bool { inputDeviceUID == SystemAudioTap.uid }
 
+    /// System Audio has no noise floor (nothing playing is exact zero), so the slider, set for a turntable's surface
+    /// noise or a room, doesn't apply: anything above this counts as music, however low the player's volume.
+    static let systemAudioThresholdDB: Double = -70
+    /// What counts as silence for the current input.
+    var silenceThresholdDB: Double { usingSystemAudio ? Self.systemAudioThresholdDB : thresholdDB }
+
     /// "System Audio", "System Audio · Firefox", "System Audio · 2 apps", "System Audio · all but Zoom".
     var systemAudioLabel: String {
         let names = systemAudioApps.map(\.name)
@@ -965,7 +972,7 @@ final class AppModel {
         useSpotify = d.object(forKey: "useSpotify") as? Bool ?? true
         useWebScrobbler = d.object(forKey: "useWebScrobbler") as? Bool ?? true
         askBeforeMicAfterPlayer = d.object(forKey: "askBeforeMicAfterPlayer") as? Bool ?? true
-        gate = LevelGate(thresholdDB: threshold)
+        gate = LevelGate(thresholdDB: d.string(forKey: "inputDeviceUID") == SystemAudioTap.uid ? Self.systemAudioThresholdDB : threshold)
         arbiter = PushArbiter(role: role)
         applyTiming()
 
@@ -1374,14 +1381,14 @@ final class AppModel {
         }
         // Sound again after the stream paused for silence: resume at once, not after the gate's attack time, or
         // the start of the record goes missing on the other Mac.
-        if streamSender.idle, db >= thresholdDB {
+        if streamSender.idle, db >= silenceThresholdDB {
             streamSender.idle = false
             // Count silence again from now: a lone pop that never opens the gate mustn't keep the stream awake.
             silentSince = Date()
         }
         // A brief dip below the threshold while the gate stays open: likely the gap between two tracks.
         if gate.isOpen, micOffReason == nil {
-            if db < thresholdDB {
+            if db < silenceThresholdDB {
                 if quietSince == nil { quietSince = now }
             } else if let since = quietSince {
                 quietSince = nil
@@ -1684,7 +1691,7 @@ final class AppModel {
             target = Int((min(max(v, 0), 1) * top).rounded())
         } else {
             // From just above the silence threshold to 30 dB over it.
-            let v = (smoothedLevelDB - thresholdDB) / 30
+            let v = (smoothedLevelDB - silenceThresholdDB) / 30
             target = Int((min(max(v, 0), 1) * top).rounded())
         }
         let current = iconLevel ?? Int(top / 2)
