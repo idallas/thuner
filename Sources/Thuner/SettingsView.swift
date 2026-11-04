@@ -731,7 +731,7 @@ private struct StreamingSettings: View {
                 Picker("Method", selection: $model.streamMethod) {
                     ForEach(StreamMethod.allCases, id: \.self) { Text($0.name).tag($0) }
                 }
-                Picker(model.streamMethod == .raw ? "Safety margin" : "Minimum buffer", selection: $model.streamMarginMs) {
+                Picker(model.streamMethod == .raw ? "Safety margin" : "Minimum buffer", selection: $model.streamMethodMarginMs) {
                     ForEach([0.5, 1, 2, 3, 5, 10, 20], id: \.self) { ms in
                         Text(ms < 1 ? "0.5 ms" : "\(Int(ms)) ms").tag(ms)
                     }

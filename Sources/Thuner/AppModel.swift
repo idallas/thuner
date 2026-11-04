@@ -121,8 +121,16 @@ final class AppModel {
         }
     }
     var streamMethod: StreamMethod { didSet { save(streamMethod.rawValue, "streamMethod"); applyStreamReceiver() } }
-    /// Extra buffer: for raw, the margin beyond one output buffer; for resilient, the least it keeps.
+    /// Resilient's least buffer (it grows from measured jitter), 2 ms by default.
     var streamMarginMs: Double { didSet { save(streamMarginMs, "streamMarginMs"); applyStreamReceiver() } }
+    /// Raw's safety margin beyond one output buffer, 5 ms by default: 3 ms gave several dropouts a minute even on
+    /// gigabit Ethernet (2026-11-03), from the output callback's own timing rather than the network.
+    var streamRawMarginMs: Double { didSet { save(streamRawMarginMs, "streamRawMarginMs"); applyStreamReceiver() } }
+    /// The margin the chosen method uses, for the pickers.
+    var streamMethodMarginMs: Double {
+        get { streamMethod == .raw ? streamRawMarginMs : streamMarginMs }
+        set { if streamMethod == .raw { streamRawMarginMs = newValue } else { streamMarginMs = newValue } }
+    }
     /// Nil for the system's default output.
     var streamOutputUID: String? {
         didSet {
@@ -1040,6 +1048,7 @@ final class AppModel {
         }
         streamMethod = StreamMethod(rawValue: d.string(forKey: "streamMethod") ?? "") ?? .resilient
         streamMarginMs = d.object(forKey: "streamMarginMs") as? Double ?? 2
+        streamRawMarginMs = d.object(forKey: "streamRawMarginMs") as? Double ?? 5
         streamOutputUID = d.string(forKey: "streamOutputUID")
         streamOutputChannel = d.integer(forKey: "streamOutputChannel")
         inputNames = d.dictionary(forKey: "inputNames") as? [String: String] ?? [:]
@@ -1332,7 +1341,7 @@ final class AppModel {
             if streamLookingSince == nil { streamLookingSince = Date() }
             return
         }
-        let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMarginMs, outputUID: streamOutputUID,
+        let settings = AudioStreamReceiver.Settings(method: streamMethod, marginMs: streamMethodMarginMs, outputUID: streamOutputUID,
                                                     outputChannel: streamOutputUID == nil ? 0 : streamOutputChannel)
         let receiver = AudioStreamReceiver(source: address, host: streamSource, settings: settings, cipher: streamCipher)
         receiver.onChange = { [weak self, weak receiver] in

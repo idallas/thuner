@@ -104,7 +104,7 @@ struct StreamWindowView: View {
                 ChoiceButtons(selection: $model.streamMethod,
                               choices: [(StreamMethod.raw, "Raw"), (StreamMethod.resilient, "Resilient")])
                 .help("Raw: lowest latency, for Ethernet. Resilient: an adaptive buffer that rides out a busy network.")
-                Picker(model.streamMethod == .raw ? "Margin" : "Minimum", selection: $model.streamMarginMs) {
+                Picker(model.streamMethod == .raw ? "Margin" : "Minimum", selection: $model.streamMethodMarginMs) {
                     ForEach([0.5, 1, 2, 3, 5, 10, 20], id: \.self) { ms in
                         Text(ms < 1 ? "0.5 ms" : "\(Int(ms)) ms").tag(ms)
                     }
