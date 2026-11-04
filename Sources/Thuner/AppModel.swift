@@ -611,11 +611,21 @@ final class AppModel {
         return machine.displayed
     }
 
-    /// The last track the Mac this one defers to reported, and when, for `shownTrack` after it goes quiet.
-    private var remoteLastTrack: (track: Track, at: Date)?
+    /// The last track the Mac this one defers to reported, and when, for `shownTrack` after it goes quiet. Saved,
+    /// so after a relaunch the panel shows the most recent cover from either Mac, not always this Mac's own.
+    private var remoteLastTrack: (track: Track, at: Date)? {
+        didSet {
+            if let remoteLastTrack, let data = try? JSONEncoder().encode(remoteLastTrack.track) {
+                defaults.set(data, forKey: "remoteLastTrack")
+                defaults.set(remoteLastTrack.at, forKey: "remoteLastTrackAt")
+            }
+        }
+    }
     /// When this Mac's own displayed track last changed (checked each tick), so a track that hasn't played here
-    /// for a while doesn't take the screen back from the other Mac's.
-    private var localDisplayedAt = Date.distantPast
+    /// for a while doesn't take the screen back from the other Mac's. Saved alongside the track.
+    private var localDisplayedAt = Date.distantPast {
+        didSet { defaults.set(localDisplayedAt, forKey: "localDisplayedAt") }
+    }
     @ObservationIgnored private var lastLocalDisplayed: Track?
 
     /// Pause or resume. Resuming from an auto-pause just wakes it (it isn't a pause you chose).
@@ -1080,6 +1090,15 @@ final class AppModel {
             machine.displayedExternally(track)
             logger.notice("Restored last cover: \(track.displayName)")
             clearAfterQuietSince = Date()
+            // Restoring it isn't showing it anew: keep when it was really shown, so the other Mac's more recent
+            // track (below) wins until something plays here.
+            lastLocalDisplayed = track
+            localDisplayedAt = d.object(forKey: "localDisplayedAt") as? Date ?? Date.distantPast
+        }
+        if let data = d.data(forKey: "remoteLastTrack"), let track = try? JSONDecoder().decode(Track.self, from: data),
+           let at = d.object(forKey: "remoteLastTrackAt") as? Date {
+            remoteLastTrack = (track, at)
+            if localDisplayedAt < at { logger.notice("Restored \(deferTo ?? "the other Mac")'s last cover: \(track.displayName)") }
         }
 
         devices = AudioDevices.inputDevices()
