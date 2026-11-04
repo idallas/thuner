@@ -594,11 +594,21 @@ final class AppModel {
         return nil
     }
 
-    /// What the panel and floating cover show: the other Mac's track while it has control.
+    /// What the panel and floating cover show: the other Mac's track while it has control. When it goes quiet (the
+    /// gap between a record's tracks, its end), its last track stays up rather than something this Mac showed
+    /// before it coming back, until this Mac has something newer of its own.
     var shownTrack: Track? {
         if peerHasControl, let track = remote?.track { return track }
+        if let last = remoteLastTrack, localDisplayedAt < last.at, activePlayer == nil, machine.state == .idle { return last.track }
         return machine.displayed
     }
+
+    /// The last track the Mac this one defers to reported, and when, for `shownTrack` after it goes quiet.
+    private var remoteLastTrack: (track: Track, at: Date)?
+    /// When this Mac's own displayed track last changed (checked each tick), so a track that hasn't played here
+    /// for a while doesn't take the screen back from the other Mac's.
+    private var localDisplayedAt = Date.distantPast
+    @ObservationIgnored private var lastLocalDisplayed: Track?
 
     /// Pause or resume. Resuming from an auto-pause just wakes it (it isn't a pause you chose).
     func togglePause() {
@@ -2277,6 +2287,7 @@ final class AppModel {
         case .active, .push:
             arbiter.primaryWasActive(at: Date())
             remote = RemoteNowPlaying(host: message.host, track: message.nowPlaying, updatedAt: Date())
+            if let track = message.nowPlaying { remoteLastTrack = (track, Date()) }
             // The other Mac's plays go in this Mac's history too (it scrobbles them itself, if it does).
             // Repeats of the same play (every heartbeat carries it) just update its row.
             if let track = message.nowPlaying {
@@ -2305,6 +2316,10 @@ final class AppModel {
     }
 
     private func updateFloatingCoverDimming(at now: Date) {
+        if machine.displayed != lastLocalDisplayed {
+            lastLocalDisplayed = machine.displayed
+            if machine.displayed != nil { localDisplayedAt = now }
+        }
         if let track = shownTrack, track != lastShownTrack { lastShownTrack = track }
         // A paused player counts as something to come back to: its play button stays at full strength.
         let active = musicIsPlaying || controllablePlayer != nil
