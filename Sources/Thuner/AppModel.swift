@@ -69,6 +69,57 @@ final class AppModel {
     /// do something.
     var canScrobble: Bool { scrobblingEnabled && hasScrobbleService }
 
+    /// Sources switched off for scrobbling (Settings → Scrobbling → Scrobble from, or the Scrobble button while
+    /// one plays), by the name shown for them. Remembered; `scrobbleSourcesOff` in UserDefaults.
+    var scrobbleSources = ScrobbleSources() {
+        didSet { if scrobbleSources != oldValue { save(scrobbleSources.off.sorted(), "scrobbleSourcesOff") } }
+    }
+    /// The source of what's playing (or shown from the other Mac), as the Scrobble button and the history name it.
+    var currentScrobbleSource: String? {
+        if peerHasControl, let remote { return remote.host }
+        if let player = activePlayer { return player.name }
+        if scrobbles.play != nil || machine.state == .playing { return PlayHistory.Source.shazam.rawValue }
+        return nil
+    }
+    /// Scrobbling, as far as the source playing is concerned: on in Settings, a service connected, not paused,
+    /// and the source not switched off.
+    var scrobbleButtonOn: Bool {
+        canScrobble && !radioMode && (currentScrobbleSource.map(scrobbleSources.allows) ?? true)
+    }
+    var scrobbleButtonHelp: String {
+        guard canScrobble else { return "Set up scrobbling in Settings → Scrobbling" }
+        if radioMode { return "Scrobbling paused: click to scrobble again" }
+        guard let source = currentScrobbleSource else { return "Scrobbling: click to pause it for now" }
+        return scrobbleSources.allows(source)
+            ? "Scrobbling \(source): click to stop scrobbling \(source) (remembered)"
+            : "Not scrobbling \(source): click to scrobble \(source) (remembered)"
+    }
+    /// The Scrobble button (panel, ⋯ menu, controls): about the source playing, else everything.
+    func toggleScrobble() {
+        let source = currentScrobbleSource
+        let r = ScrobbleSources.press(source: source, paused: radioMode, sources: scrobbleSources)
+        let turnedOn = source.map { !scrobbleSources.allows($0) && r.sources.allows($0) } ?? false
+        if r.sources != scrobbleSources {
+            scrobbleSources = r.sources
+            if let source { note(r.sources.allows(source) ? "Scrobbling \(source) again" : "Not scrobbling \(source) from now on") }
+        }
+        if r.paused != radioMode { radioMode = r.paused }
+        // Switched on mid-track: this track counts (radio mode's own change already catches up).
+        if turnedOn, !radioMode { catchUpScrobbling() }
+    }
+    /// Settings → Scrobbling → Scrobble from.
+    func setScrobbleSource(_ source: String, on: Bool) {
+        guard scrobbleSources.allows(source) != on else { return }
+        scrobbleSources.set(source, on: on)
+        note(on ? "Scrobbling \(source) again" : "Not scrobbling \(source) from now on")
+        if on, !radioMode, source == currentScrobbleSource { catchUpScrobbling() }
+    }
+    /// Every source seen in the history, plus any switched off, for Settings.
+    var scrobbleSourceNames: [String] {
+        Set(history.entries.map(\.sourceName)).union(scrobbleSources.off)
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// Radio mode: keep listening and showing covers, but don't send anything to scrobbling services.
     var radioMode: Bool {
         didSet {
@@ -998,6 +1049,7 @@ final class AppModel {
         tuneshineHost = d.string(forKey: "tuneshineHost") ?? ""
         scrobblingEnabled = d.bool(forKey: "scrobblingEnabled")
         radioMode = d.bool(forKey: "radioMode")
+        scrobbleSources = ScrobbleSources(off: Set(d.stringArray(forKey: "scrobbleSourcesOff") ?? []))
         // Copies set up before the tour existed have settings already; don't greet them.
         onboardingComplete = d.bool(forKey: "onboardingComplete")
             || ["role", "inputDeviceUID", "lastDisplayed", "scrobblingEnabled"].contains { d.object(forKey: $0) != nil }
@@ -2019,6 +2071,17 @@ final class AppModel {
             }
             return
         }
+        // A source switched off: in the history, nothing to the services, and the other Macs don't relay it
+        // either (that's what "never scrobble KCRW" means). Kept as missed, so switching the source on mid-track
+        // still sends this one.
+        if let source = scrobbleSource(of: action), !scrobbleSources.allows(source) {
+            if case .scrobble(let track, let startedAt) = action {
+                missedScrobble = action
+                note("Not scrobbling \(track.displayName): \(source) is switched off")
+                announceScrobble(track, startedAt: startedAt, to: [], paused: true)
+            }
+            return
+        }
         // A Mac deferring to another can hear its music, so it stays quiet while that Mac is active.
         // Plays reported by Spotify/Music on this Mac are real regardless.
         guard activePlayer != nil || canPush(at: now) else { return }
@@ -2087,6 +2150,19 @@ final class AppModel {
         return has
     }
 
+    /// Where the play behind a scrobble action came from: its history entry's name, else what's playing now.
+    private func scrobbleSource(of action: ScrobbleTracker.Action) -> String? {
+        let (track, startedAt): (Track, Date?) = switch action {
+        case .nowPlaying(let t): (t, scrobbles.play?.startedAt)
+        case .scrobble(let t, let at): (t, at)
+        }
+        let entry = history.entries.last { e in
+            e.source != .anotherMac && e.track.isSameSong(as: track)
+                && (startedAt.map { abs(e.startedAt.timeIntervalSince($0)) < 120 } ?? true)
+        }
+        return entry?.sourceName ?? currentScrobbleSource
+    }
+
     /// Every ThUNER tells the others where each play went, so a Mac deferring to it can send the play to services
     /// it doesn't have.
     private func announceScrobble(_ track: Track, startedAt: Date, to destinations: [String], paused: Bool = false) {
@@ -2101,6 +2177,10 @@ final class AppModel {
         history.record(track, startedAt: startedAt, source: .anotherMac, host: host)
         if history != before { saveHistory() }
         guard !paused, !radioMode, scrobblingEnabled, hasScrobbleService else { return }
+        guard scrobbleSources.allows(host) else {
+            note("Not scrobbling \(track.displayName) for \(host): \(host) is switched off here")
+            return
+        }
         Task {
             var missing: [any ScrobbleService] = []
             for service in await activeScrobbleServices() {

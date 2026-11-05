@@ -73,8 +73,9 @@ struct MenuView: View {
                 .separator,
                 .init(title: "Floating Cover", isOn: model.showFloatingCover) { model.showFloatingCover.toggle() },
                 .init(title: "Open Web Display", symbol: "safari", isEnabled: model.webDisplayEnabled) { model.openWebDisplay() },
-                .init(title: "Scrobble", isOn: model.canScrobble && !model.radioMode, isEnabled: model.canScrobble) {
-                    model.radioMode.toggle()
+                .init(title: model.currentScrobbleSource.map { "Scrobble \($0)" } ?? "Scrobble", isOn: model.scrobbleButtonOn,
+                      isEnabled: model.canScrobble) {
+                    model.toggleScrobble()
                 },
                 .separator,
                 .init(title: "Activity…") { open(.activity) },
@@ -161,14 +162,16 @@ struct MenuView: View {
         HStack(spacing: 4) {
             Image(systemName: HistoryView.symbol(for: entry.source))
             Text(entry.startedAt, format: .dateTime.hour().minute())
-            if model.canScrobble, model.radioMode, entry.scrobble == .notSent {
+            if model.canScrobble, entry.scrobble == .notSent,
+               model.radioMode || !model.scrobbleSources.allows(entry.sourceName) {
                 Text("·")
                 Text("Not scrobbling")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Wordmark.deepOrange)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Capsule().fill(Wordmark.orange.opacity(0.16)))
-                    .help("Scrobbling is off for now (the Scrobble button below turns it back on)")
+                    .help(model.radioMode ? "Scrobbling is paused (the Scrobble button below turns it back on)"
+                          : "\(entry.sourceName) is switched off for scrobbling (the Scrobble button below turns it on)")
             }
             switch entry.scrobble {
             case .scrobbled:
@@ -535,11 +538,8 @@ private struct QuickToggles: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            QuickToggle(title: "Scrobble", symbol: "music.note.list", isOn: model.canScrobble && !model.radioMode,
-                        help: model.canScrobble
-                            ? (model.radioMode ? "Not scrobbling: click to scrobble again" : "Scrobbling: click to pause it for now")
-                            : "Set up scrobbling in Settings → Scrobbling") {
-                model.radioMode.toggle()
+            QuickToggle(title: "Scrobble", symbol: "music.note.list", isOn: model.scrobbleButtonOn, help: model.scrobbleButtonHelp) {
+                model.toggleScrobble()
             }
             .disabled(!model.canScrobble)
             QuickToggle(title: "Cover", symbol: "rectangle.on.rectangle", isOn: model.showFloatingCover,

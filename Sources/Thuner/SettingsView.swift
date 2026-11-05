@@ -294,6 +294,21 @@ struct SettingsView: View {
                         Text("Sends Spotify and Apple Music plays on this Mac, plus Shazam matches, to every service below that's switched on. Don't also run Silicio or a service's own Spotify link for the same account. Shazam matches here aren't scrobbled while the Mac this one defers to is playing.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Section {
+                        let names = model.scrobbleSourceNames
+                        if names.isEmpty {
+                            Text("Sources appear here once something has played.").foregroundStyle(.secondary)
+                        }
+                        ForEach(names, id: \.self) { name in
+                            Toggle(name, isOn: Binding(get: { model.scrobbleSources.allows(name) },
+                                                       set: { model.setScrobbleSource(name, on: $0) }))
+                        }
+                    } header: {
+                        Text("Scrobble from")
+                    } footer: {
+                        Text("Everything ThUNER has seen play: apps, websites, Shazam here, other Macs' records. A new source scrobbles until it's switched off. The Scrobble button in the panel switches whichever source is playing, and remembers it; with nothing playing it pauses everything.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
 
                     Section("Last.fm") {
                         if let user = model.lastFMUser {
