@@ -144,11 +144,12 @@ final class PlayerMonitor {
     static let airPlayBundleID = "com.apple.controlcenter"
     private var lastAirPlayClient: NowPlayingHelper.Report.Client?
 
-    /// The app sending over AirPlay, if MediaRemote's client names it rather than Control Center itself.
+    /// The app sending over AirPlay, if MediaRemote's client names it rather than Control Center itself. Seen
+    /// 2026-11-05: the client is Control Center's bundle ID with the sender's name ("KCRW") as its display name.
     static func airPlaySender(_ report: NowPlayingHelper.Report) -> String? {
         guard let who = report.client else { return nil }
         let own = [airPlayBundleID, "com.apple.controlcenter.helper"]
-        if let name = who.name, !name.isEmpty, name != "Control Center", !own.contains(who.bundle ?? "") { return name }
+        if let name = who.name, !name.isEmpty, name != "Control Center", name != "AirPlay" { return name }
         // No name, but an app ID that isn't Control Center's: its last part ("com.kcrw.app" → "app" isn't much,
         // but "org.videolan.vlc" → "vlc" is something).
         if let bundle = who.parent ?? who.bundle, !own.contains(bundle), !bundle.hasPrefix("com.apple.controlcenter"),
