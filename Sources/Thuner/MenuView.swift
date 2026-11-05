@@ -419,10 +419,11 @@ struct MenuView: View {
 
     private var stateLabel: String {
         if model.peerHasControl { return model.remote?.track == nil ? "Identifying" : "Playing" }
+        // Muted and Paused are about the mic; while a player (AirPlay, Spotify…) is the source, it's playing.
+        if model.activePlayer != nil { return "Playing" }
         if model.pausedManually { return "Muted" }
         if model.autoPaused { return "Paused" }
         if model.heldAfterPlayer != nil { return "Stopped" }
-        if model.activePlayer != nil { return "Playing" }
         return switch model.machine.state {
         case .idle: "Idle"
         case .identifying: "Identifying"
@@ -438,8 +439,8 @@ struct MenuView: View {
 
     private var stateColor: Color {
         if model.peerHasControl { return model.remote?.track == nil ? .orange : .green }
-        if model.pausedManually || model.autoPaused || model.heldAfterPlayer != nil { return .gray }
         if model.activePlayer != nil { return .green }
+        if model.pausedManually || model.autoPaused || model.heldAfterPlayer != nil { return .gray }
         return switch model.machine.state {
         case .idle: .gray
         case .identifying: .orange
