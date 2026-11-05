@@ -15,6 +15,8 @@
 
 typedef void (*MRGetInfo)(dispatch_queue_t, void (^)(NSDictionary *));
 typedef void (*MRGetPID)(dispatch_queue_t, void (^)(int));
+typedef void (*MRGetClient)(dispatch_queue_t, void (^)(id));
+typedef NSString *(*MRClientString)(id);
 typedef void (*MRGetIsPlaying)(dispatch_queue_t, void (^)(Boolean));
 typedef void (*MRRegister)(dispatch_queue_t);
 typedef Boolean (*MRSendCommand)(int, NSDictionary *);
@@ -22,6 +24,8 @@ typedef Boolean (*MRSendCommand)(int, NSDictionary *);
 static MRGetInfo getInfo;
 static MRGetPID getPID;
 static MRGetIsPlaying getIsPlaying;
+static MRGetClient getClient;
+static MRClientString clientName, clientBundleID, clientParentBundleID;
 static MRSendCommand sendCommand;
 static NSString *lastLine;
 static NSString *lastArtworkKey;
@@ -37,58 +41,92 @@ static void emit(NSDictionary *report) {
 
 static void scheduleFetch(double delay);
 
+/// Who macOS says is playing, as MediaRemote describes the client: its name, bundle ID and the app behind a
+/// helper process (Safari's GPU process → Safari). For AirPlay into this Mac the process is Control Center; what
+/// the client says about the sender is passed on for ThUNER to name it.
+static NSDictionary *describeClient(id client) {
+    if (!client) return nil;
+    NSMutableDictionary *who = [NSMutableDictionary dictionary];
+    if (clientName && clientName(client).length) who[@"name"] = clientName(client);
+    if (clientBundleID && clientBundleID(client).length) who[@"bundle"] = clientBundleID(client);
+    if (clientParentBundleID && clientParentBundleID(client).length) who[@"parent"] = clientParentBundleID(client);
+    return who.count ? who : nil;
+}
+
+static void report(int pid, Boolean playing, NSDictionary *info, id client);
+
 static void fetch(void) {
     fetchPending = NO;
-    // Three separate questions, which can straddle a change (the new app with the old track): after any change,
+    // Separate questions, which can straddle a change (the new app with the old track): after any change,
     // ask again a moment later, and the repeat sets it straight.
     getPID(dispatch_get_main_queue(), ^(int pid) {
         getIsPlaying(dispatch_get_main_queue(), ^(Boolean playing) {
             getInfo(dispatch_get_main_queue(), ^(NSDictionary *info) {
-                NSMutableDictionary *report = [NSMutableDictionary dictionary];
-                report[@"playing"] = playing ? @YES : @NO;
-                if (pid > 0) report[@"pid"] = @(pid);
-                NSString *(^string)(NSString *) = ^NSString *(NSString *key) {
-                    id value = info[[@"kMRMediaRemoteNowPlayingInfo" stringByAppendingString:key]];
-                    return [value isKindOfClass:NSString.class] && [value length] > 0 ? value : nil;
-                };
-                NSNumber *(^number)(NSString *) = ^NSNumber *(NSString *key) {
-                    id value = info[[@"kMRMediaRemoteNowPlayingInfo" stringByAppendingString:key]];
-                    return [value isKindOfClass:NSNumber.class] ? value : nil;
-                };
-                if (string(@"Title")) report[@"title"] = string(@"Title");
-                if (string(@"Artist")) report[@"artist"] = string(@"Artist");
-                if (string(@"Album")) report[@"album"] = string(@"Album");
-                if (number(@"Duration").doubleValue > 0) report[@"duration"] = number(@"Duration");
-
-                // Lines repeat for every notification; only pass on real changes (position aside, it always moves).
-                NSData *keyData = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingSortedKeys error:nil];
-                NSString *line = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
-                if ([line isEqualToString:lastLine]) return;
-                lastLine = line;
-                scheduleFetch(1.0);
-
-                // Where the track is now: elapsed as of the info's timestamp, moved on at its playback rate.
-                NSNumber *elapsed = number(@"ElapsedTime");
-                if (elapsed) {
-                    double position = elapsed.doubleValue;
-                    id stamp = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
-                    if ([stamp isKindOfClass:NSDate.class]) {
-                        // Paused, it stays where it stopped (the rate can still say 1).
-                        if (playing) position += -[stamp timeIntervalSinceNow] * number(@"PlaybackRate").doubleValue;
-                    }
-                    report[@"position"] = @(position);
-                }
-                // The cover only when the track changes, as it can be large.
-                NSString *artworkKey = [NSString stringWithFormat:@"%@|%@|%@", report[@"title"], report[@"artist"], report[@"album"]];
-                id artwork = info[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
-                if ([artwork isKindOfClass:NSData.class] && [artwork length] > 0 && ![artworkKey isEqualToString:lastArtworkKey]) {
-                    lastArtworkKey = artworkKey;
-                    report[@"artwork"] = [artwork base64EncodedStringWithOptions:0];
-                }
-                emit(report);
+                if (getClient) getClient(dispatch_get_main_queue(), ^(id client) { report(pid, playing, info, client); });
+                else report(pid, playing, info, nil);
             });
         });
     });
+}
+
+static void report(int pid, Boolean playing, NSDictionary *info, id client) {
+    NSMutableDictionary *report = [NSMutableDictionary dictionary];
+    report[@"playing"] = playing ? @YES : @NO;
+    if (pid > 0) report[@"pid"] = @(pid);
+    if (describeClient(client)) report[@"client"] = describeClient(client);
+    NSString *(^string)(NSString *) = ^NSString *(NSString *key) {
+        id value = info[[@"kMRMediaRemoteNowPlayingInfo" stringByAppendingString:key]];
+        return [value isKindOfClass:NSString.class] && [value length] > 0 ? value : nil;
+    };
+    NSNumber *(^number)(NSString *) = ^NSNumber *(NSString *key) {
+        id value = info[[@"kMRMediaRemoteNowPlayingInfo" stringByAppendingString:key]];
+        return [value isKindOfClass:NSNumber.class] ? value : nil;
+    };
+    if (string(@"Title")) report[@"title"] = string(@"Title");
+    if (string(@"Artist")) report[@"artist"] = string(@"Artist");
+    if (string(@"Album")) report[@"album"] = string(@"Album");
+    if (number(@"Duration").doubleValue > 0) report[@"duration"] = number(@"Duration");
+    // Anything else said in words (not covers or timing): for AirPlay, where the sender may be named.
+    NSMutableDictionary *other = [NSMutableDictionary dictionary];
+    NSString *prefix = @"kMRMediaRemoteNowPlayingInfo";
+    for (NSString *key in info) {
+        if (![key hasPrefix:prefix]) continue;
+        NSString *name = [key substringFromIndex:prefix.length];
+        if ([@[@"Title", @"Artist", @"Album", @"Duration", @"ElapsedTime", @"PlaybackRate", @"Timestamp"] containsObject:name]
+            || [name hasPrefix:@"Artwork"] || [name hasSuffix:@"Identifier"]) continue;
+        id value = info[key];
+        if ([value isKindOfClass:NSString.class] && [value length] > 0)
+            other[name] = [value length] > 120 ? [value substringToIndex:120] : value;
+        else if ([value isKindOfClass:NSNumber.class]) other[name] = [value stringValue];
+    }
+    if (other.count) report[@"other"] = other;
+
+    // Lines repeat for every notification; only pass on real changes (position aside, it always moves).
+    NSData *keyData = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingSortedKeys error:nil];
+    NSString *line = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
+    if ([line isEqualToString:lastLine]) return;
+    lastLine = line;
+    scheduleFetch(1.0);
+
+    // Where the track is now: elapsed as of the info's timestamp, moved on at its playback rate.
+    NSNumber *elapsed = number(@"ElapsedTime");
+    if (elapsed) {
+        double position = elapsed.doubleValue;
+        id stamp = info[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
+        if ([stamp isKindOfClass:NSDate.class]) {
+            // Paused, it stays where it stopped (the rate can still say 1).
+            if (playing) position += -[stamp timeIntervalSinceNow] * number(@"PlaybackRate").doubleValue;
+        }
+        report[@"position"] = @(position);
+    }
+    // The cover only when the track changes, as it can be large.
+    NSString *artworkKey = [NSString stringWithFormat:@"%@|%@|%@", report[@"title"], report[@"artist"], report[@"album"]];
+    id artwork = info[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
+    if ([artwork isKindOfClass:NSData.class] && [artwork length] > 0 && ![artworkKey isEqualToString:lastArtworkKey]) {
+        lastArtworkKey = artworkKey;
+        report[@"artwork"] = [artwork base64EncodedStringWithOptions:0];
+    }
+    emit(report);
 }
 
 /// Notifications come in bursts (info, playing state, app); fetch once they've settled.
@@ -115,6 +153,11 @@ void ThunerNowPlayingMain(void *interpreter, void *cv) {
     getPID = mr ? (MRGetPID)dlsym(mr, "MRMediaRemoteGetNowPlayingApplicationPID") : NULL;
     getIsPlaying = mr ? (MRGetIsPlaying)dlsym(mr, "MRMediaRemoteGetNowPlayingApplicationIsPlaying") : NULL;
     sendCommand = mr ? (MRSendCommand)dlsym(mr, "MRMediaRemoteSendCommand") : NULL;
+    // Optional: without them the report just has no client.
+    getClient = mr ? (MRGetClient)dlsym(mr, "MRMediaRemoteGetNowPlayingClient") : NULL;
+    clientName = mr ? (MRClientString)dlsym(mr, "MRNowPlayingClientGetDisplayName") : NULL;
+    clientBundleID = mr ? (MRClientString)dlsym(mr, "MRNowPlayingClientGetBundleIdentifier") : NULL;
+    clientParentBundleID = mr ? (MRClientString)dlsym(mr, "MRNowPlayingClientGetParentAppBundleIdentifier") : NULL;
     MRRegister registerForNotifications = mr ? (MRRegister)dlsym(mr, "MRMediaRemoteRegisterForNowPlayingNotifications") : NULL;
     if (!getInfo || !getPID || !getIsPlaying || !sendCommand || !registerForNotifications) {
         emit(@{@"error": @"MediaRemote isn't available"});

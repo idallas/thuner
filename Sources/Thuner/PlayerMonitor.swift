@@ -94,10 +94,20 @@ final class PlayerMonitor {
     /// What macOS says is playing. Apple Music and Spotify are left out (followed directly, with more detail),
     /// as is ThUNER itself.
     func receivedNowPlaying(_ report: NowPlayingHelper.Report) {
-        let app = report.pid.flatMap { AudioDevices.owningApp(of: $0) }
+        // The process (Safari's GPU helper, Control Center for AirPlay), and the app MediaRemote's client says is
+        // behind it (Safari): the app decides whether it's a browser; the process says whether it's AirPlay.
+        let process = report.pid.flatMap { AudioDevices.owningApp(of: $0) }
+        let isAirPlay = process?.bundleID == Self.airPlayBundleID || report.client?.bundle == Self.airPlayBundleID
+        let app: AudioDevices.AudioApp? = if isAirPlay {
+            AudioDevices.AudioApp(bundleID: Self.airPlayBundleID, name: "AirPlay")
+        } else if let bundle = report.client?.parent ?? report.client?.bundle {
+            AudioDevices.AudioApp(bundleID: bundle, name: report.client?.name ?? process?.name ?? bundle)
+        } else {
+            process
+        }
         let skipped: Set<String> = ["com.apple.Music", "com.spotify.client", Bundle.main.bundleIdentifier ?? "com.idallas.thuner"]
         guard let title = report.title, let reported = report.artist.map(WebScrobblerEvent.withoutTopic), !reported.isEmpty,
-              !(app.map { skipped.contains($0.bundleID) } ?? false) else {
+              !skipped.contains(app?.bundleID ?? ""), !skipped.contains(process?.bundleID ?? "") else {
             // Nothing (or nothing of ours) playing: end whatever Now Playing had going.
             if let current = latest[.nowPlaying], current.isPlaying {
                 update(.nowPlaying, track: current.track, playing: false, position: nil, site: current.site,
@@ -117,13 +127,36 @@ final class PlayerMonitor {
         // Radio apps (KCRW, over AirPlay) put the show in the title and "Song - Artist" in the artist field; the
         // catalogue decides which way round, if either.
         let readings = track.splittingArtist()
-        // macOS's AirPlay receiver lives in Control Center.
-        let site = app?.bundleID == Self.airPlayBundleID ? "AirPlay" : app?.name ?? "Now Playing"
+        // macOS's AirPlay receiver lives in Control Center; the sender's app, when MediaRemote names it.
+        var site = app?.name ?? "Now Playing"
+        if isAirPlay {
+            site = Self.airPlaySender(report).map { "\($0) (AirPlay)" } ?? "AirPlay"
+            if let who = report.client, who != lastAirPlayClient {
+                lastAirPlayClient = who
+                log.debug("AirPlay sender as macOS reports it: \(who.name ?? "no name"), \(who.bundle ?? "no bundle ID"), "
+                          + "behind \(who.parent ?? "no app"); other: \(report.other ?? [:])")
+            }
+        }
         update(.nowPlaying, track: track, playing: report.playing, position: report.position,
                site: site, appBundleID: app?.bundleID, readings: readings)
     }
 
     static let airPlayBundleID = "com.apple.controlcenter"
+    private var lastAirPlayClient: NowPlayingHelper.Report.Client?
+
+    /// The app sending over AirPlay, if MediaRemote's client names it rather than Control Center itself.
+    static func airPlaySender(_ report: NowPlayingHelper.Report) -> String? {
+        guard let who = report.client else { return nil }
+        let own = [airPlayBundleID, "com.apple.controlcenter.helper"]
+        if let name = who.name, !name.isEmpty, name != "Control Center", !own.contains(who.bundle ?? "") { return name }
+        // No name, but an app ID that isn't Control Center's: its last part ("com.kcrw.app" → "app" isn't much,
+        // but "org.videolan.vlc" → "vlc" is something).
+        if let bundle = who.parent ?? who.bundle, !own.contains(bundle), !bundle.hasPrefix("com.apple.controlcenter"),
+           let last = bundle.split(separator: ".").last, last.count > 3 {
+            return last.prefix(1).uppercased() + last.dropFirst()
+        }
+        return nil
+    }
 
     /// A website that went quiet without saying so (its tab closed, the browser quit): Web Scrobbler sends nothing
     /// then, so a play ends once the song should have finished, plus a little, or after 10 minutes without a length.

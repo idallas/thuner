@@ -18,6 +18,16 @@ final class NowPlayingHelper {
         var position: Double?
         /// Base64 cover, sent once per track.
         var artwork: String?
+        /// Who MediaRemote says is playing (the app behind a helper process, or an AirPlay sender).
+        var client: Client?
+        /// Other things said in words about the track, for finding out what an AirPlay sender passes on.
+        var other: [String: String]?
+
+        struct Client: Decodable, Equatable {
+            var name: String?
+            var bundle: String?
+            var parent: String?
+        }
     }
 
     /// Each change of what's playing. Main queue.
