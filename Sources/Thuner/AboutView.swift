@@ -26,9 +26,10 @@ struct AboutView: View {
                 Button("Check for Updates…") { model.updater.checkForUpdates() }
                 Link("Website", destination: URL(string: "https://idallas.com/software/thuner/")!)
                     .buttonStyle(.bordered)
-                Link("Source on GitHub", destination: URL(string: "https://github.com/idallas/thuner")!)
+                Link("GitHub", destination: URL(string: "https://github.com/idallas/thuner")!)
                     .buttonStyle(.bordered)
             }
+            .fixedSize()  // the buttons at their full width (the window is sized to fit them)
 
             Divider()
 
@@ -41,6 +42,6 @@ struct AboutView: View {
             }
         }
         .padding(24)
-        .frame(width: 340)
+        .frame(width: 400)
     }
 }

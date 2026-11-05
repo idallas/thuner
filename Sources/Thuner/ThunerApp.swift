@@ -53,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openActivityWindow"] != nil {
             AppWindows.shared.show(.activity)
         }
+        if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openAboutWindow"] != nil {
+            AppWindows.shared.show(.about)
+        }
         if UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["openPanel"] != nil {
             panel.openPanel()
         }
