@@ -1427,6 +1427,12 @@ final class AppModel {
         lastStreamRecord = now
         let resends = receiver.resendStats
         let latency = receiver.latency
+        // Quiet for long enough, and audio again: that's the next session.
+        if recorder.isOver(at: now), receiver.stats?.playing == true {
+            streamLog.save(recorder.snapshot)
+            recorder = StreamSessionRecorder(session: StreamSession(source: streamSource, method: streamMethod, started: now))
+            logger.info("Stream session ended after \(Int(StreamLog.continueWithin / 60)) quiet minutes; a new one starts now")
+        }
         recorder.record(StreamSample(stats: receiver.stats, latencyMs: latency?.totalMs,
                                      resendsRequested: resends.requested, resendsRecovered: resends.recovered,
                                      outputBufferMs: latency?.outputBufferMs ?? 0), at: now)

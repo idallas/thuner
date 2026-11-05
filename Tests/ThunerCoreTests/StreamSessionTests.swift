@@ -73,7 +73,7 @@ import Testing
         #expect(log.sessions.count == 1)
         #expect(log.resumable(source: "echo", method: .raw, at: start + 60) != nil)
         #expect(log.resumable(source: "echo", method: .resilient, at: start + 60) == nil)
-        #expect(log.resumable(source: "echo", method: .raw, at: start + 600) == nil)
+        #expect(log.resumable(source: "echo", method: .raw, at: start + 1 + StreamLog.continueWithin) == nil)
 
         // Carrying on: the new receiver's counts start from zero again.
         var resumed = StreamSessionRecorder(continuing: log.sessions[0])
@@ -81,6 +81,24 @@ import Testing
         log.save(resumed.snapshot)
         #expect(log.sessions.count == 1)
         #expect(log.sessions[0].counters.received == 25)
+    }
+
+    @Test func quietSpellEndsTheSessionWhileStillListening() {
+        var recorder = StreamSessionRecorder(session: StreamSession(source: "echo", method: .resilient, started: start))
+        #expect(!recorder.isOver(at: start + 86400))  // never played: nothing to end
+        for second in 0..<60 {
+            recorder.record(StreamSample(stats: stats(received: second * 375), latencyMs: 8), at: start + Double(second))
+        }
+        // Still listening, nothing playing (the record's over, the sender has gone idle).
+        var now = start + 60
+        while now < start + 59 + StreamLog.continueWithin {
+            recorder.record(StreamSample(stats: nil, latencyMs: nil), at: now)
+            #expect(!recorder.isOver(at: now))
+            now += 1
+        }
+        #expect(recorder.snapshot.ended == start + 59)  // the end is the last audio, not the last sample
+        #expect(recorder.isOver(at: start + 59 + StreamLog.continueWithin))
+        #expect(StreamLog.continueWithin >= 5 * 60)  // the gap between records (and a relaunch) is not the end
     }
 }
 

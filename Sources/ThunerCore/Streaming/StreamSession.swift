@@ -44,14 +44,16 @@ public struct StreamMinute: Codable, Sendable, Equatable {
     public var playingSeconds: Double
 }
 
-/// One listening session: from choosing a Mac to listen to until stopping (or switching to another). Short breaks
-/// (a settings change, ThUNER relaunching for an update) carry on the same session.
+/// One listening session: a sitting of records from one Mac. It ends once nothing has played for a while
+/// (`StreamLog.continueWithin`), whether listening stopped or just went quiet (a Mac that always listens to the
+/// turntable Mac would otherwise have one session for weeks); short breaks (a settings change, ThUNER relaunching
+/// for an update, the gap between records) carry on the same session.
 public struct StreamSession: Codable, Sendable, Equatable, Identifiable {
     public var id = UUID()
     public var source: String
     public var method: StreamMethod
     public var started: Date
-    /// Last time it was recorded: the end, once it's over.
+    /// Last time audio played (the start until it has).
     public var ended: Date
     /// Time with audio actually playing (quiet gaps between records don't count).
     public var playingSeconds = 0.0
@@ -128,10 +130,16 @@ public struct StreamSessionRecorder: Sendable {
         self.session = session
     }
 
+    /// Audio has played, and then nothing for `StreamLog.continueWithin`: this session is over, and what plays
+    /// next belongs to a new one.
+    public func isOver(at now: Date) -> Bool {
+        session.playingSeconds > 0 && now.timeIntervalSince(session.ended) >= StreamLog.continueWithin
+    }
+
     public mutating func record(_ sample: StreamSample, at now: Date) {
         let elapsed = lastAt.map { min(max(now.timeIntervalSince($0), 0), 5) } ?? 0
         lastAt = now
-        session.ended = now
+        if sample.stats?.playing == true { session.ended = now }
 
         var current = StreamCounters()
         if let stats = sample.stats {
@@ -236,8 +244,9 @@ public struct StreamLog: Codable, Sendable, Equatable {
     public static let keep = 100
     /// Minute-by-minute detail is kept for this long (the graph goes back 7 days); totals are kept for good.
     public static let minutesKept: TimeInterval = 8 * 86400
-    /// A session that ended less than this long ago carries on rather than a new one starting.
-    public static let continueWithin: TimeInterval = 120
+    /// A session that last played audio less than this long ago carries on rather than a new one starting: after
+    /// a relaunch, or while still listening through a quiet spell (changing records, not an evening).
+    public static let continueWithin: TimeInterval = 10 * 60
 
     public var sessions: [StreamSession] = []
 
@@ -259,7 +268,7 @@ public struct StreamLog: Codable, Sendable, Equatable {
         }
     }
 
-    /// The last session, if it's the same source and method and ended only moments ago.
+    /// The last session, if it's the same source and method and played audio not long ago.
     public func resumable(source: String, method: StreamMethod, at now: Date) -> StreamSession? {
         guard let last = sessions.last, last.source == source, last.method == method,
               now.timeIntervalSince(last.ended) < Self.continueWithin else { return nil }
