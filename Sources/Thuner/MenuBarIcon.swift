@@ -11,8 +11,8 @@ enum MenuBarIcon {
         case level(Int)
         /// Another Mac (the turntable Mac) is listening: the gauge shows its state, with radio waves beside it.
         case elsewhere(playing: Bool)
-        /// Listening is paused: the gauge dimmed, with pause bars beside it, or a "z" for an auto-pause (which
-        /// wakes by itself when music starts).
+        /// Listening is paused: the gauge dimmed, with a crossed-out mic beside it, or a "z" for an auto-pause
+        /// (which wakes by itself when music starts).
         case paused(auto: Bool)
     }
 
@@ -46,7 +46,7 @@ enum MenuBarIcon {
             gaugeKind = kind
         }
         let wide = isElsewhere || pausedAuto != nil
-        let image = NSImage(size: NSSize(width: wide ? 27 : 20, height: 18), flipped: false) { _ in
+        let image = NSImage(size: NSSize(width: wide ? 28 : 20, height: 18), flipped: false) { _ in
             if pausedAuto != nil {
                 // Dimmed: the gauge at half strength, drawn into a layer so its parts don't add up.
                 NSGraphicsContext.current?.cgContext.setAlpha(0.45)
@@ -59,7 +59,7 @@ enum MenuBarIcon {
             }
             if isElsewhere { drawWaves(around: CGPoint(x: 20.5, y: 9)) }
             if let auto = pausedAuto {
-                if auto { drawSleep(at: CGPoint(x: 21, y: 3)) } else { drawPauseBars(at: CGPoint(x: 21.5, y: 3)) }
+                if auto { drawSleep(at: CGPoint(x: 21, y: 3)) } else { drawMutedMic(at: CGPoint(x: 20, y: 2.5)) }
             }
             return true
         }
@@ -69,17 +69,20 @@ enum MenuBarIcon {
         case .identifying: "ThUNER: identifying"
         case .playing, .level: "ThUNER: playing"
         case .elsewhere: "ThUNER: another Mac is playing"
-        case .paused(let auto): auto ? "ThUNER: paused until music plays" : "ThUNER: listening paused"
+        case .paused(let auto): auto ? "ThUNER: paused until music plays" : "ThUNER: mic muted"
         }
         return image
     }
 
-    /// Two short vertical bars, the pause symbol.
-    private static func drawPauseBars(at origin: CGPoint) {
-        NSColor.black.set()
-        for dx in [CGFloat(0), 3.6] {
-            NSBezierPath(roundedRect: CGRect(x: origin.x + dx, y: origin.y, width: 2, height: 8), xRadius: 0.8, yRadius: 0.8).fill()
-        }
+    /// A small mic with a slash through it, the mute symbol (SF Symbols' mic.slash.fill, so it matches the
+    /// panel's mute button). `origin` is the bottom left of a 7×10 box.
+    private static func drawMutedMic(at origin: CGPoint) {
+        guard let symbol = NSImage(systemSymbolName: "mic.slash.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9.5, weight: .semibold)) else { return }
+        let size = symbol.size
+        let scale = min(7.5 / size.width, 10.5 / size.height)
+        let rect = CGRect(x: origin.x, y: origin.y, width: size.width * scale, height: size.height * scale)
+        symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     }
 
     /// A small "z", for an auto-pause that wakes by itself.
