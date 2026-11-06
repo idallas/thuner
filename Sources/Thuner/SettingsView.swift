@@ -214,16 +214,14 @@ struct SettingsView: View {
                             }
                         }
                         if model.notifyTrackChanges {
-                            ForEach(model.notificationSourceNames, id: \.self) { name in
-                                Toggle(name, isOn: Binding(get: { model.notificationSources.allows(name) },
-                                                           set: { model.setNotificationSource(name, on: $0) }))
-                            }
+                            SourceSwitchList(rows: model.notificationSourceRows, switches: model.notificationSources,
+                                             set: { model.setNotificationSource($0, on: $1) })
                         }
                     } header: {
                         Text("Notifications")
                     } footer: {
                         Text(TrackNotifier.available
-                             ? "A banner with the cover, song, artist and where it's playing, each time a new track is confirmed. Apple Music and Spotify start switched off because they can show their own (Music → Settings → General, Spotify → Settings). Other sources ThUNER has seen appear as they play."
+                             ? "A banner with the cover, song, artist and where it's playing, each time a new track is confirmed. Apple Music and Spotify start switched off because they can show their own (Music → Settings → General, Spotify → Settings). Other sources ThUNER has seen appear as they play. AirPlay senders follow the AirPlay switch until given their own; switching AirPlay resets them."
                              : "Not available when ThUNER runs outside its app bundle.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -317,18 +315,16 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
-                        let names = model.scrobbleSourceNames
-                        if names.isEmpty {
+                        let rows = model.scrobbleSourceRows
+                        if rows.isEmpty {
                             Text("Sources appear here once something has played.").foregroundStyle(.secondary)
                         }
-                        ForEach(names, id: \.self) { name in
-                            Toggle(name, isOn: Binding(get: { model.scrobbleSources.allows(name) },
-                                                       set: { model.setScrobbleSource(name, on: $0) }))
-                        }
+                        SourceSwitchList(rows: rows, switches: model.scrobbleSources,
+                                         set: { model.setScrobbleSource($0, on: $1) })
                     } header: {
                         Text("Scrobble from")
                     } footer: {
-                        Text("Everything ThUNER has seen play: apps, websites, Shazam here, other Macs' records. A new source scrobbles until it's switched off. The Scrobble button in the panel switches whichever source is playing, and remembers it; with nothing playing it pauses everything.")
+                        Text("Everything ThUNER has seen play: apps, websites, Shazam here, other Macs' records. A new source scrobbles until it's switched off. AirPlay senders follow the AirPlay switch until given their own; switching AirPlay resets them. The Scrobble button in the panel switches whichever source is playing, and remembers it; with nothing playing it pauses everything.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
 

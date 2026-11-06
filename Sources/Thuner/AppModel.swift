@@ -70,9 +70,15 @@ final class AppModel {
     var canScrobble: Bool { scrobblingEnabled && hasScrobbleService }
 
     /// Sources switched off for scrobbling (Settings → Scrobbling → Scrobble from, or the Scrobble button while
-    /// one plays), by the name shown for them. Remembered; `scrobbleSourcesOff` in UserDefaults.
-    var scrobbleSources = ScrobbleSources() {
-        didSet { if scrobbleSources != oldValue { save(scrobbleSources.off.sorted(), "scrobbleSourcesOff") } }
+    /// one plays), by the name shown for them; AirPlay senders follow the "AirPlay" switch unless overridden.
+    /// Remembered: `scrobbleSourcesOff` and `scrobbleSourcesOn` in UserDefaults.
+    var scrobbleSources = SourceSwitches() {
+        didSet {
+            if scrobbleSources != oldValue {
+                save(scrobbleSources.off.sorted(), "scrobbleSourcesOff")
+                save(scrobbleSources.on.sorted(), "scrobbleSourcesOn")
+            }
+        }
     }
     /// The source of what's playing (or shown from the other Mac), as the Scrobble button and the history name it.
     var currentScrobbleSource: String? {
@@ -97,7 +103,7 @@ final class AppModel {
     /// The Scrobble button (panel, ⋯ menu, controls): about the source playing, else everything.
     func toggleScrobble() {
         let source = currentScrobbleSource
-        let r = ScrobbleSources.press(source: source, paused: radioMode, sources: scrobbleSources)
+        let r = SourceSwitches.press(source: source, paused: radioMode, sources: scrobbleSources)
         let turnedOn = source.map { !scrobbleSources.allows($0) && r.sources.allows($0) } ?? false
         if r.sources != scrobbleSources {
             scrobbleSources = r.sources
@@ -109,15 +115,19 @@ final class AppModel {
     }
     /// Settings → Scrobbling → Scrobble from.
     func setScrobbleSource(_ source: String, on: Bool) {
-        guard scrobbleSources.allows(source) != on else { return }
+        let before = scrobbleSources
         scrobbleSources.set(source, on: on)
-        note(on ? "Scrobbling \(source) again" : "Not scrobbling \(source) from now on")
-        if on, !radioMode, source == currentScrobbleSource { catchUpScrobbling() }
+        guard scrobbleSources != before else { return }
+        let what = SourceSwitches.isGroup(source) ? "anything over AirPlay" : source
+        note(on ? "Scrobbling \(what) again" : "Not scrobbling \(what) from now on")
+        if on, !radioMode, let playing = currentScrobbleSource, scrobbleSources.allows(playing), !before.allows(playing) {
+            catchUpScrobbling()
+        }
     }
-    /// Every source seen in the history, plus any switched off, for Settings.
-    var scrobbleSourceNames: [String] {
-        Set(history.entries.map(\.sourceName)).union(scrobbleSources.off)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    /// The rows Settings lists: every source seen in the history, plus any switched on or off by hand, with
+    /// AirPlay senders under their group.
+    var scrobbleSourceRows: [SourceSwitches.Row] {
+        SourceSwitches.rows(for: Set(history.entries.map(\.sourceName)).union(scrobbleSources.off).union(scrobbleSources.on))
     }
 
     // MARK: Notifications
@@ -130,24 +140,32 @@ final class AppModel {
             if notifyTrackChanges { notifier.requestAuthorization() }
         }
     }
-    /// Sources switched off for notifications, by the name shown for them; Apple Music and Spotify unless switched
-    /// on, since they show their own. `notificationSourcesOff` in UserDefaults.
-    var notificationSources = NotificationSources() {
-        didSet { if notificationSources != oldValue { save(notificationSources.off.sorted(), "notificationSourcesOff") } }
+    /// Sources switched off for notifications, by the name shown for them, AirPlay senders following the "AirPlay"
+    /// switch; Apple Music and Spotify unless switched on, since they show their own. `notificationSourcesOff`
+    /// and `notificationSourcesOn` in UserDefaults.
+    var notificationSources = SourceSwitches.forNotifications() {
+        didSet {
+            if notificationSources != oldValue {
+                save(notificationSources.off.sorted(), "notificationSourcesOff")
+                save(notificationSources.on.sorted(), "notificationSourcesOn")
+            }
+        }
     }
     let notifier = TrackNotifier()
 
     /// Settings → Display → Notifications → Notify for.
     func setNotificationSource(_ source: String, on: Bool) {
-        guard notificationSources.allows(source) != on else { return }
+        let before = notificationSources
         notificationSources.set(source, on: on)
-        note(on ? "Notifying for \(source)" : "Not notifying for \(source)")
+        guard notificationSources != before else { return }
+        let what = SourceSwitches.isGroup(source) ? "anything over AirPlay" : source
+        note(on ? "Notifying for \(what)" : "Not notifying for \(what)")
     }
-    /// The sources Settings lists: everything in the history plus any switched off (so Apple Music and Spotify
-    /// show from the start), and Shazam.
-    var notificationSourceNames: [String] {
-        Set(history.entries.map(\.sourceName)).union(notificationSources.off).union([PlayHistory.Source.shazam.rawValue])
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    /// The rows Settings lists: everything in the history plus any switched on or off by hand (so Apple Music and
+    /// Spotify show from the start), and Shazam, with AirPlay senders under their group.
+    var notificationSourceRows: [SourceSwitches.Row] {
+        SourceSwitches.rows(for: Set(history.entries.map(\.sourceName)).union(notificationSources.off)
+            .union(notificationSources.on).union([PlayHistory.Source.shazam.rawValue]))
     }
     /// The source of what's shown, as the history names it, for a notification.
     private var shownSource: (kind: PlayHistory.Source, name: String)? {
@@ -1101,8 +1119,11 @@ final class AppModel {
         scrobblingEnabled = d.bool(forKey: "scrobblingEnabled")
         radioMode = d.bool(forKey: "radioMode")
         notifyTrackChanges = d.bool(forKey: "notifyTrackChanges")
-        if let off = d.stringArray(forKey: "notificationSourcesOff") { notificationSources = NotificationSources(off: Set(off)) }
-        scrobbleSources = ScrobbleSources(off: Set(d.stringArray(forKey: "scrobbleSourcesOff") ?? []))
+        if let off = d.stringArray(forKey: "notificationSourcesOff") {
+            notificationSources = SourceSwitches(off: Set(off), on: Set(d.stringArray(forKey: "notificationSourcesOn") ?? []))
+        }
+        scrobbleSources = SourceSwitches(off: Set(d.stringArray(forKey: "scrobbleSourcesOff") ?? []),
+                                         on: Set(d.stringArray(forKey: "scrobbleSourcesOn") ?? []))
         // Copies set up before the tour existed have settings already; don't greet them.
         onboardingComplete = d.bool(forKey: "onboardingComplete")
             || ["role", "inputDeviceUID", "lastDisplayed", "scrobblingEnabled"].contains { d.object(forKey: $0) != nil }

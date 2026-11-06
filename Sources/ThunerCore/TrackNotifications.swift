@@ -1,27 +1,7 @@
 import Foundation
 
-/// Which sources show a notification when their track changes. Keyed like `ScrobbleSources`, by the name shown
-/// for the source. Apple Music and Spotify start switched off: each shows its own banners (Music → Settings →
-/// General, Spotify → Settings → Display), so ThUNER's would double them. Everything else (Shazam here, another
-/// Mac's records, websites, apps, AirPlay) starts on.
-public struct NotificationSources: Equatable, Sendable {
-    public static let defaultOff: Set<String> = [PlayHistory.Source.appleMusic.rawValue, PlayHistory.Source.spotify.rawValue]
-
-    /// Sources switched off.
-    public var off: Set<String>
-
-    public init(off: Set<String> = NotificationSources.defaultOff) {
-        self.off = off
-    }
-
-    public func allows(_ source: String) -> Bool { !off.contains(source) }
-
-    public mutating func set(_ source: String, on: Bool) {
-        if on { off.remove(source) } else { off.insert(source) }
-    }
-}
-
-/// What a track-change notification says, and when one is due.
+/// What a track-change notification says, and when one is due. Which sources notify is a `SourceSwitches`
+/// (`forNotifications()` for the defaults).
 public enum TrackNotifications {
     public struct Content: Equatable, Sendable {
         public var title: String

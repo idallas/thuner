@@ -6,24 +6,6 @@ private let song = Track(title: "Sons of Thunder", artist: "High On Fire", durat
 private let other = Track(title: "Devilution", artist: "High On Fire", duration: 300)
 
 @Suite struct TrackNotificationsTests {
-    @Test func applePlayersStartOffEverythingElseOn() {
-        let s = NotificationSources()
-        #expect(!s.allows("Apple Music"))
-        #expect(!s.allows("Spotify"))
-        #expect(s.allows("Shazam"))
-        #expect(s.allows("echo"))
-        #expect(s.allows("KCRW (AirPlay)"))
-    }
-
-    @Test func switchingIsRemembered() {
-        var s = NotificationSources()
-        s.set("Apple Music", on: true)
-        s.set("Shazam", on: false)
-        #expect(s.allows("Apple Music"))
-        #expect(!s.allows("Shazam"))
-        #expect(NotificationSources(off: s.off) == s)
-    }
-
     @Test func onlyANewSongIsDue() {
         #expect(TrackNotifications.isNewSong(from: nil, to: song))
         #expect(TrackNotifications.isNewSong(from: song, to: other))
