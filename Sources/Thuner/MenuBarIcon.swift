@@ -11,8 +11,8 @@ enum MenuBarIcon {
         case level(Int)
         /// Another Mac (the turntable Mac) is listening: the gauge shows its state, with radio waves beside it.
         case elsewhere(playing: Bool)
-        /// Listening is paused: the gauge dimmed, with a crossed-out mic beside it, or a "z" for an auto-pause
-        /// (which wakes by itself when music starts).
+        /// Listening is paused. Muted by hand: a crossed-out mic in place of the gauge (nothing to show on it
+        /// anyway). An auto-pause (which wakes by itself when music starts): the gauge dimmed, with a "z".
         case paused(auto: Bool)
     }
 
@@ -45,8 +45,12 @@ enum MenuBarIcon {
             isElsewhere = false
             gaugeKind = kind
         }
-        let wide = isElsewhere || pausedAuto != nil
-        let image = NSImage(size: NSSize(width: wide ? 28 : 20, height: 18), flipped: false) { _ in
+        let wide = isElsewhere || pausedAuto == true
+        let image = NSImage(size: NSSize(width: wide ? 27 : 20, height: 18), flipped: false) { _ in
+            if pausedAuto == false {
+                drawMutedMic(in: CGRect(x: 0, y: 0, width: 20, height: 18))
+                return true
+            }
             if pausedAuto != nil {
                 // Dimmed: the gauge at half strength, drawn into a layer so its parts don't add up.
                 NSGraphicsContext.current?.cgContext.setAlpha(0.45)
@@ -59,7 +63,7 @@ enum MenuBarIcon {
             }
             if isElsewhere { drawWaves(around: CGPoint(x: 20.5, y: 9)) }
             if let auto = pausedAuto {
-                if auto { drawSleep(at: CGPoint(x: 21, y: 3)) } else { drawMutedMic(at: CGPoint(x: 20, y: 2.5)) }
+                if auto { drawSleep(at: CGPoint(x: 21, y: 3)) }
             }
             return true
         }
@@ -74,14 +78,15 @@ enum MenuBarIcon {
         return image
     }
 
-    /// A small mic with a slash through it, the mute symbol (SF Symbols' mic.slash.fill, so it matches the
-    /// panel's mute button). `origin` is the bottom left of a 7×10 box.
-    private static func drawMutedMic(at origin: CGPoint) {
+    /// A mic with a slash through it, the mute symbol (SF Symbols' mic.slash.fill, so it matches the panel's
+    /// mute button), centred in `box` at about the gauge's height.
+    private static func drawMutedMic(in box: CGRect) {
         guard let symbol = NSImage(systemSymbolName: "mic.slash.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 9.5, weight: .semibold)) else { return }
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) else { return }
         let size = symbol.size
-        let scale = min(7.5 / size.width, 10.5 / size.height)
-        let rect = CGRect(x: origin.x, y: origin.y, width: size.width * scale, height: size.height * scale)
+        let scale = min(16 / size.width, 15 / size.height)
+        let w = size.width * scale, h = size.height * scale
+        let rect = CGRect(x: box.midX - w / 2, y: box.midY - h / 2, width: w, height: h)
         symbol.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     }
 
