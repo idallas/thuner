@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.model = model
         AppModel.current = model
         AppWindows.shared.model = model
+        model.notifier.install()
         let panel = PanelController(model: model)
         self.panel = panel
         AppWindows.shared.openPanel = { [weak panel] in panel?.openPanel() }

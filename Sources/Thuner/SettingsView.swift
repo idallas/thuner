@@ -206,6 +206,28 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Section {
+                        Toggle("Notify when the track changes", isOn: $model.notifyTrackChanges)
+                            .disabled(!TrackNotifier.available)
+                        if model.notifyTrackChanges, model.notifier.authorization == .denied {
+                            LabeledContent("Notifications are off for ThUNER in System Settings") {
+                                Button("Open System Settings") { model.notifier.openSystemSettings() }
+                            }
+                        }
+                        if model.notifyTrackChanges {
+                            ForEach(model.notificationSourceNames, id: \.self) { name in
+                                Toggle(name, isOn: Binding(get: { model.notificationSources.allows(name) },
+                                                           set: { model.setNotificationSource(name, on: $0) }))
+                            }
+                        }
+                    } header: {
+                        Text("Notifications")
+                    } footer: {
+                        Text(TrackNotifier.available
+                             ? "A banner with the cover, song, artist and where it's playing, each time a new track is confirmed. Apple Music and Spotify start switched off because they can show their own (Music → Settings → General, Spotify → Settings). Other sources ThUNER has seen appear as they play."
+                             : "Not available when ThUNER runs outside its app bundle.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section {
                         Toggle("Web display", isOn: $model.webDisplayEnabled)
                         if model.webDisplayEnabled {
                             Picker("Reachable from", selection: $model.webDisplayLocalOnly) {

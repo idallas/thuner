@@ -120,6 +120,57 @@ final class AppModel {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    // MARK: Notifications
+
+    /// Settings → Display → Notifications: a macOS notification (cover, song, artist, where it's playing) when the
+    /// track changes. Off by default. Turning it on asks macOS for permission, once.
+    var notifyTrackChanges: Bool {
+        didSet {
+            save(notifyTrackChanges, "notifyTrackChanges")
+            if notifyTrackChanges { notifier.requestAuthorization() }
+        }
+    }
+    /// Sources switched off for notifications, by the name shown for them; Apple Music and Spotify unless switched
+    /// on, since they show their own. `notificationSourcesOff` in UserDefaults.
+    var notificationSources = NotificationSources() {
+        didSet { if notificationSources != oldValue { save(notificationSources.off.sorted(), "notificationSourcesOff") } }
+    }
+    let notifier = TrackNotifier()
+
+    /// Settings → Display → Notifications → Notify for.
+    func setNotificationSource(_ source: String, on: Bool) {
+        guard notificationSources.allows(source) != on else { return }
+        notificationSources.set(source, on: on)
+        note(on ? "Notifying for \(source)" : "Not notifying for \(source)")
+    }
+    /// The sources Settings lists: everything in the history plus any switched off (so Apple Music and Spotify
+    /// show from the start), and Shazam.
+    var notificationSourceNames: [String] {
+        Set(history.entries.map(\.sourceName)).union(notificationSources.off).union([PlayHistory.Source.shazam.rawValue])
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+    /// The source of what's shown, as the history names it, for a notification.
+    private var shownSource: (kind: PlayHistory.Source, name: String)? {
+        if peerHasControl, let remote { return (.anotherMac, remote.host) }
+        if let player = activePlayer {
+            let kind: PlayHistory.Source = switch player.source {
+            case .appleMusic: .appleMusic
+            case .spotify: .spotify
+            case .browser: .browser
+            case .nowPlaying: .nowPlaying
+            }
+            return (kind, player.name)
+        }
+        if machine.state == .playing { return (.shazam, PlayHistory.Source.shazam.rawValue) }
+        return nil
+    }
+    /// The shown track changed to a new song: tell the user, if notifications are on for its source.
+    private func notifyIfNewSong(_ track: Track, after previous: Track?) {
+        guard notifyTrackChanges, TrackNotifications.isNewSong(from: previous, to: track), let source = shownSource else { return }
+        guard notificationSources.allows(source.name) else { return }
+        notifier.notify(track, content: TrackNotifications.content(for: track, source: source.kind, sourceName: source.name))
+    }
+
     /// Radio mode: keep listening and showing covers, but don't send anything to scrobbling services.
     var radioMode: Bool {
         didSet {
@@ -1049,6 +1100,8 @@ final class AppModel {
         tuneshineHost = d.string(forKey: "tuneshineHost") ?? ""
         scrobblingEnabled = d.bool(forKey: "scrobblingEnabled")
         radioMode = d.bool(forKey: "radioMode")
+        notifyTrackChanges = d.bool(forKey: "notifyTrackChanges")
+        if let off = d.stringArray(forKey: "notificationSourcesOff") { notificationSources = NotificationSources(off: Set(off)) }
         scrobbleSources = ScrobbleSources(off: Set(d.stringArray(forKey: "scrobbleSourcesOff") ?? []))
         // Copies set up before the tour existed have settings already; don't greet them.
         onboardingComplete = d.bool(forKey: "onboardingComplete")
@@ -2435,7 +2488,10 @@ final class AppModel {
             lastLocalDisplayed = machine.displayed
             if machine.displayed != nil { localDisplayedAt = now }
         }
-        if let track = shownTrack, track != lastShownTrack { lastShownTrack = track }
+        if let track = shownTrack, track != lastShownTrack {
+            notifyIfNewSong(track, after: lastShownTrack)
+            lastShownTrack = track
+        }
         // A paused player counts as something to come back to: its play button stays at full strength.
         let active = musicIsPlaying || controllablePlayer != nil
         if active { coverQuietSince = nil } else if coverQuietSince == nil { coverQuietSince = now }
