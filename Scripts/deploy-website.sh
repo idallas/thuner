@@ -29,6 +29,25 @@ if [[ -n ${DOWNLOADS_BUCKET:-} ]]; then
       --header-upload "Cache-Control: public, max-age=31536000, immutable" --stats-one-line -q
     rclone copy "$src" "$dest" --include "/updates/*.html" --header-upload "Cache-Control: public, max-age=3600" -q
     rclone copy "$src" "$dest" --include "/appcast.xml" --header-upload "Cache-Control: no-cache" -q
+    # A fixed address for the newest stable release (the first appcast item without a channel), for the
+    # website's download button: updates/ThUNER-latest.zip.
+    latest=$(python3 - "$src/appcast.xml" <<'PY'
+import re, sys, urllib.parse
+xml = open(sys.argv[1]).read()
+for item in re.findall(r"<item>.*?</item>", xml, flags=re.S):
+    if "<sparkle:channel>" in item:
+        continue
+    url = re.search(r'<enclosure[^>]*\surl="([^"]+)"', item)
+    if url:
+        print(urllib.parse.unquote(url.group(1).rsplit("/", 1)[-1]))
+        break
+PY
+)
+    if [[ -n $latest && -f $src/updates/$latest ]]; then
+      rclone copyto "$src/updates/$latest" "$dest/updates/ThUNER-latest.zip" \
+        --header-upload "Cache-Control: public, max-age=300" -q
+      echo "Latest stable: $latest (updates/ThUNER-latest.zip)"
+    fi
   )
   echo "Uploaded release files to $DOWNLOADS_BUCKET/thuner"
 fi
