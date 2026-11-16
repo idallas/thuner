@@ -69,6 +69,8 @@ final class PeerLink: NSObject, @unchecked Sendable {
     /// Every ThUNER service found, to look up again when a Mac's addresses change.
     private var services: [String: NetService] = [:]
     private var lastRefresh = Date.distantPast
+    /// When a message from another ThUNER last arrived.
+    private(set) var lastHeard = Date.distantPast
     private var peers: [String: [sockaddr_in]] = [:]
     private var lastIgnoredLog = Date.distantPast
     /// Lookups tried so far per service, while it's still around (cleared when it goes).
@@ -246,6 +248,7 @@ final class PeerLink: NSObject, @unchecked Sendable {
             if recentMessageIDs.count > 64 { recentMessageIDs.removeFirst(recentMessageIDs.count - 64) }
         }
         log.notice("Heard \(message.event.rawValue) from \(message.host) (\(message.role))")
+        lastHeard = Date()
         onMessage?(message)
     }
 }

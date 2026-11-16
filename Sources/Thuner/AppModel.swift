@@ -547,6 +547,9 @@ final class AppModel {
     @ObservationIgnored private var smoothedLevelDB: Double = -160
     private(set) var machine = NowPlayingMachine()
     private(set) var captureError: String?
+    /// Other Macs can be heard but not reached: macOS is refusing ThUNER the local network until it's relaunched
+    /// (see `UDP.unreachableSinceDate`).
+    private(set) var localNetworkBlocked = false
     private(set) var micDenied = false
     private(set) var log: [LogEntry] = []
     /// A confirmed track this Mac didn't push because the Mac it defers to had the display.
@@ -1708,6 +1711,29 @@ final class AppModel {
 
     // MARK: State machine plumbing
 
+    private func checkLocalNetwork() {
+        let blocked = UDP.unreachableSinceDate.map { peers.lastHeard.timeIntervalSince($0) > 1 } ?? false
+        guard blocked != localNetworkBlocked else { return }
+        localNetworkBlocked = blocked
+        if blocked { note("macOS is blocking ThUNER from the local network (other Macs are heard but can't be reached). Relaunch ThUNER to fix it") }
+        else { note("The local network is reachable again") }
+    }
+
+    /// Quits and opens this copy of ThUNER again, once this one has gone. Settings and the listening pause are
+    /// saved as they change, so it comes back as it was.
+    func relaunch() {
+        let script = "while /bin/kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\""
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script, Bundle.main.bundlePath]
+        do {
+            try process.run()
+            NSApp.terminate(nil)
+        } catch {
+            note("Couldn't relaunch: \(error.localizedDescription)")
+        }
+    }
+
     private func tick() {
         let now = Date()
         if streamReceiver == nil, let since = streamLookingSince, now.timeIntervalSince(since) >= 30,
@@ -1727,6 +1753,7 @@ final class AppModel {
         }
         checkAutoPause(at: now)
         checkMissingInput(at: now)
+        checkLocalNetwork()
         players.expireBrowser(at: now)
         noteRecentAudioApps(at: now)
         updateControllablePlayer()

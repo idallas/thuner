@@ -357,6 +357,15 @@ struct MenuView: View {
                 .font(.system(size: 11)).foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        if model.localNetworkBlocked {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("macOS is blocking ThUNER from the local network: other Macs can be heard but not reached.",
+                      systemImage: "network.slash")
+                    .font(.system(size: 11)).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Relaunch ThUNER") { model.relaunch() }.controlSize(.small)
+            }
+        }
         if model.hasPermissionProblem {
             Button { open(.settings) } label: {
                 Label("A permission needs attention. Open Settings…", systemImage: "exclamationmark.triangle.fill")

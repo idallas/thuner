@@ -760,6 +760,18 @@ enum UDP {
     }
 
     private static let failureLog = ThunerLogger("network")
+    /// Since when sends to other Macs have failed with "No route to host" (a Double's bits; 0 = the last one went).
+    private static let unreachableSince = Atomic<UInt64>(0)
+
+    /// When sends to other Macs started failing with "No route to host", if the last one did. Heard from one of
+    /// them since, that's macOS refusing ThUNER the local network rather than the other Mac being gone: after an app
+    /// is installed or updated (Chrome updating itself, a build replacing ThUNER's bundle) macOS's Local Network
+    /// check restarts, and a running ThUNER (seen with a build run from `build/`) can't reach the LAN again until
+    /// it's relaunched.
+    static var unreachableSinceDate: Date? {
+        let bits = unreachableSince.load(ordering: .relaxed)
+        return bits == 0 ? nil : Date(timeIntervalSinceReferenceDate: Double(bitPattern: bits))
+    }
     private static let lastFailure = Mutex<[String: Date]>([:])
 
     /// Sends one datagram; says so in the log when it fails, the first time and then at most every 10 minutes for
@@ -774,8 +786,15 @@ enum UDP {
                 sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        guard sent < 0 else { return true }
+        let unicast = address.sin_addr.s_addr != INADDR_BROADCAST && !isLoopback(address.sin_addr)
+        guard sent < 0 else {
+            if unicast { unreachableSince.store(0, ordering: .relaxed) }
+            return true
+        }
         let code = errno
+        if unicast, code == EHOSTUNREACH, unreachableSince.load(ordering: .relaxed) == 0 {
+            unreachableSince.store(Date().timeIntervalSinceReferenceDate.bitPattern, ordering: .relaxed)
+        }
         let to = string(address.sin_addr)
         let now = Date()
         let due = lastFailure.withLock { last in
