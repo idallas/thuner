@@ -33,6 +33,8 @@ final class PlayerMonitor {
         var browser: WebScrobblerEvent.Browser?
         /// For `.nowPlaying`: the app playing it.
         var appBundleID: String?
+        /// The cover is the player's own (not from a catalogue), so a newer one from the player replaces it.
+        var artworkFromPlayer = false
 
         /// What to call it: the app, or the website.
         var name: String { site ?? source.rawValue }
@@ -138,7 +140,7 @@ final class PlayerMonitor {
             }
         }
         update(.nowPlaying, track: track, playing: report.playing, position: report.position,
-               site: site, appBundleID: app?.bundleID, readings: readings)
+               site: site, appBundleID: app?.bundleID, readings: readings, newPlayerArtwork: report.artwork != nil)
     }
 
     static let airPlayBundleID = "com.apple.controlcenter"
@@ -204,7 +206,7 @@ final class PlayerMonitor {
     private func update(_ source: Source, track: Track?, playing: Bool, position: TimeInterval?,
                         site: String? = nil, siteArtwork: URL? = nil,
                         browser: WebScrobblerEvent.Browser? = nil, appBundleID: String? = nil,
-                        readings: [Track] = []) -> Task<Void, Never>? {
+                        readings: [Track] = [], newPlayerArtwork: Bool = false) -> Task<Void, Never>? {
         guard let track else { return nil }
         let receivedAt = Date()
         let previous = latest[source]
@@ -214,9 +216,20 @@ final class PlayerMonitor {
             t.artworkURL = previous.track.artworkURL
             t.appleMusicID = previous.track.appleMusicID
             t.duration = t.duration ?? previous.track.duration
-            emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser,
-                          appBundleID: appBundleID))
-            return nil
+            var snapshot = Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site,
+                                    browser: browser, appBundleID: appBundleID, artworkFromPlayer: previous.artworkFromPlayer)
+            // The player's cover caught up with the track (it was still the last track's when the title changed).
+            guard newPlayerArtwork, previous.artworkFromPlayer, let playerArtwork else {
+                emit(snapshot)
+                return nil
+            }
+            return Task {
+                if let url = await playerArtwork(source), url != snapshot.track.artworkURL {
+                    log.notice("\(site ?? source.rawValue): new cover for \(t.displayName)")
+                    snapshot.track.artworkURL = url
+                }
+                emit(snapshot)
+            }
         }
         log.notice("\(site ?? source.rawValue): \(playing ? "playing" : "paused") \(track.displayName)")
         return Task {
@@ -255,14 +268,18 @@ final class PlayerMonitor {
             }
             var t = track
             t.artworkURL = found.url
-            if t.artworkURL == nil, let playerArtwork { t.artworkURL = await playerArtwork(source) }
+            var fromPlayer = false
+            if t.artworkURL == nil, let playerArtwork {
+                t.artworkURL = await playerArtwork(source)
+                fromPlayer = t.artworkURL != nil
+            }
             // The site's own picture last: often a video thumbnail rather than the cover, and the Tuneshine has to
             // fetch it itself.
             if t.artworkURL == nil { t.artworkURL = siteArtwork }
             t.appleMusicID = found.appleMusicID
             if t.duration == nil { t.duration = found.duration }
             emit(Snapshot(source: source, track: t, isPlaying: playing, position: position, receivedAt: receivedAt, site: site, browser: browser,
-                          appBundleID: appBundleID))
+                          appBundleID: appBundleID, artworkFromPlayer: fromPlayer))
         }
     }
 

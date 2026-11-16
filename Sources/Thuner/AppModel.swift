@@ -1997,7 +1997,9 @@ final class AppModel {
         if autoPaused { wake("\(playing.name) started playing") }
         if !wasActive { note("Using \(playing.name) instead of Shazam; mic off") }
         updateCapture()
-        if let shown = machine.displayed, shown.isSameSong(as: playing.track) { return }
+        // The same song again, unless the player's own cover changed (it lagged behind the title).
+        if let shown = machine.displayed, shown.isSameSong(as: playing.track),
+           !playing.artworkFromPlayer || playing.track.artworkURL == nil || shown.artworkURL == playing.track.artworkURL { return }
 
         machine.displayedExternally(playing.track)
         guard playing.track.artworkURL != nil else {

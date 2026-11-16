@@ -29,6 +29,7 @@ static MRClientString clientName, clientBundleID, clientParentBundleID;
 static MRSendCommand sendCommand;
 static NSString *lastLine;
 static NSString *lastArtworkKey;
+static NSData *lastArtworkSeen, *lastArtworkSent;
 static BOOL fetchPending;
 
 static void emit(NSDictionary *report) {
@@ -101,11 +102,16 @@ static void report(int pid, Boolean playing, NSDictionary *info, id client) {
     }
     if (other.count) report[@"other"] = other;
 
-    // Lines repeat for every notification; only pass on real changes (position aside, it always moves).
+    // Lines repeat for every notification; only pass on real changes (position aside, it always moves). A new
+    // cover counts: players (KCRW over AirPlay) change the title first and the cover a moment later.
+    id artworkInfo = info[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
+    NSData *artwork = [artworkInfo isKindOfClass:NSData.class] && [artworkInfo length] > 0 ? artworkInfo : nil;
+    BOOL sameArtwork = artwork == lastArtworkSeen || [artwork isEqualToData:lastArtworkSeen];
     NSData *keyData = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingSortedKeys error:nil];
     NSString *line = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
-    if ([line isEqualToString:lastLine]) return;
+    if ([line isEqualToString:lastLine] && sameArtwork) return;
     lastLine = line;
+    lastArtworkSeen = artwork;
     scheduleFetch(1.0);
 
     // Where the track is now: elapsed as of the info's timestamp, moved on at its playback rate.
@@ -119,11 +125,12 @@ static void report(int pid, Boolean playing, NSDictionary *info, id client) {
         }
         report[@"position"] = @(position);
     }
-    // The cover only when the track changes, as it can be large.
+    // The cover only when the track or the cover changes, as it can be large. The first report of a new track
+    // can still carry the last one's cover, so a later different one is sent too.
     NSString *artworkKey = [NSString stringWithFormat:@"%@|%@|%@", report[@"title"], report[@"artist"], report[@"album"]];
-    id artwork = info[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
-    if ([artwork isKindOfClass:NSData.class] && [artwork length] > 0 && ![artworkKey isEqualToString:lastArtworkKey]) {
+    if (artwork && (![artworkKey isEqualToString:lastArtworkKey] || ![artwork isEqualToData:lastArtworkSent])) {
         lastArtworkKey = artworkKey;
+        lastArtworkSent = artwork;
         report[@"artwork"] = [artwork base64EncodedStringWithOptions:0];
     }
     emit(report);
