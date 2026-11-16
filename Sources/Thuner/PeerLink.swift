@@ -143,19 +143,10 @@ final class PeerLink: NSObject, @unchecked Sendable {
 
         // One address per peer is enough; a Mac with Wi-Fi and Ethernet on the same network has two.
         let targets = peers.values.compactMap(\.first) + [broadcast]
-        var delivered = 0
-        for var addr in targets {
-            let sent = data.withUnsafeBytes { bytes in
-                withUnsafePointer(to: &addr) {
-                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                    }
-                }
-            }
-            if sent >= 0 { delivered += 1 }
+        for addr in targets {
+            data.withUnsafeBytes { UDP.send(fd, $0, to: addr, what: event.rawValue) }
         }
         log.notice("Sent \(event.rawValue) to \(self.peers.count) ThUNER(s) plus broadcast (\(nowPlaying?.displayName ?? ""))")
-        if delivered == 0 { log.error("Couldn't send to other ThUNERs: errno \(errno)") }
     }
 
     fileprivate func found(_ service: NetService) {

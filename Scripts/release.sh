@@ -55,6 +55,15 @@ URL_PREFIX=https://idallas.com/software/thuner/updates/
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Resources/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" Resources/Info.plist
 
+# Building over the app that's running cuts off its local network: macOS refuses its new sockets once the bundle
+# on disk changes under it (seen 2026-11-16: the stream from another Mac stopped being heard), until it's relaunched.
+RUNNING_FROM_BUILD=
+if pgrep -fq "$PWD/build/Thuner.app/Contents/MacOS/Thuner"; then
+  RUNNING_FROM_BUILD=1
+  echo "warning: ThUNER is running from build/Thuner.app; once this replaces it, it can't open new local network" >&2
+  echo "         connections (streams, Tuneshine) until it's relaunched" >&2
+fi
+
 TIMESTAMP=1 Scripts/build-app.sh
 
 echo "Notarizing (this usually takes a few minutes)…"
@@ -87,3 +96,8 @@ fi
 echo
 echo "Released $VERSION (build $BUILD_NUMBER): $UPDATES/$ZIP_NAME"
 echo "Publish with: Scripts/deploy-website.sh, then commit the website changes in $WEBSITE_DIR"
+
+if [[ -n $RUNNING_FROM_BUILD ]]; then
+  echo "warning: ThUNER is still running from the build/Thuner.app this replaced: relaunch it (or rebuild a dev build" >&2
+  echo "         with Scripts/build-app.sh and relaunch) so it can open local network connections again" >&2
+fi

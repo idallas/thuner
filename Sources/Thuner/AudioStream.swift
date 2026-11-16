@@ -175,12 +175,7 @@ final class AudioStreamSender: StreamSink, @unchecked Sendable {
     }
 
     private static func send(_ fd: Int32, _ bytes: UnsafeRawBufferPointer, to address: sockaddr_in) {
-        var address = address
-        _ = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
+        UDP.send(fd, bytes, to: address, what: "the stream")
     }
 
     // MARK: Control (main thread)
@@ -761,14 +756,36 @@ enum UDP {
 
     static func send(_ fd: Int32, _ data: Data, to address: sockaddr_in) {
         guard fd >= 0 else { return }
+        data.withUnsafeBytes { send(fd, $0, to: address, what: "a stream request") }
+    }
+
+    private static let failureLog = ThunerLogger("network")
+    private static let lastFailure = Mutex<[String: Date]>([:])
+
+    /// Sends one datagram; says so in the log when it fails, the first time and then at most every 10 minutes for
+    /// the same address and error. Seen 2026-11-16: an app whose bundle was replaced on disk while it ran (a build
+    /// over `build/Thuner.app`) had every new socket's sends refused with "No route to host" by macOS's Local
+    /// Network check, while sockets opened earlier went on working; nothing showed it.
+    @discardableResult
+    static func send(_ fd: Int32, _ bytes: UnsafeRawBufferPointer, to address: sockaddr_in, what: String) -> Bool {
         var address = address
-        data.withUnsafeBytes { bytes in
-            _ = withUnsafePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
+        let sent = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
+        guard sent < 0 else { return true }
+        let code = errno
+        let to = string(address.sin_addr)
+        let now = Date()
+        let due = lastFailure.withLock { last in
+            let key = "\(to)|\(code)"
+            if let at = last[key], now.timeIntervalSince(at) < 600 { return false }
+            last[key] = now
+            return true
+        }
+        if due { failureLog.warning("Couldn't send \(what) to \(to): \(String(cString: strerror(code)))") }
+        return false
     }
 
     static func receive(_ fd: Int32) -> (Data, sockaddr_in)? {
