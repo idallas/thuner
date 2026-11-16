@@ -1264,8 +1264,16 @@ final class AppModel {
         streamSender.sharing = streamSharing
         streamCipher = StreamCipher(password: streamPassword)
         streamSender.cipher = streamCipher
+        // A stream request from an address we don't know may be a known Mac with a new lease (seen 2026-11-16: the
+        // router stopped answering renewals and trithena's Ethernet moved to another address): look again, as a
+        // peer message from it would, rather than ignoring the listener until its next peer message.
         streamSender.isKnownPeer = { [weak self] address in
-            MainActor.assumeIsolated { self?.peers.isKnownPeer(address) ?? false }
+            MainActor.assumeIsolated {
+                guard let self else { return false }
+                if self.peers.isKnownPeer(address) { return true }
+                if !PeerLink.isOwnAddress(address) { self.peers.refreshAddresses() }
+                return false
+            }
         }
         streamSender.onListenersChanged = { [weak self] hosts in
             MainActor.assumeIsolated {
