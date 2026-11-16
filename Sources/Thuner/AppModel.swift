@@ -1414,6 +1414,9 @@ final class AppModel {
     }
 
     @ObservationIgnored private var recentRestarts: [Date] = []
+    /// The chosen input wasn't there when capture last started.
+    @ObservationIgnored private var inputMissing = false
+    @ObservationIgnored private var lastMissingCheck = Date.distantPast
     @ObservationIgnored private var restartScheduled = false
 
     private func restartCapture() {
@@ -1434,6 +1437,7 @@ final class AppModel {
             return
         }
         recentRestarts.append(now)
+        inputMissing = false
         let config = AudioCapture.Config(deviceUID: inputDeviceUID, firstChannel: firstChannel, channelCount: 2,
                                          systemAudioMode: systemAudioMode,
                                          systemAudioApps: Set(systemAudioApps.map(\.bundleID)),
@@ -1453,6 +1457,7 @@ final class AppModel {
             captureError = error.localizedDescription
             captureNotice = nil
             note("Capture failed: \(error.localizedDescription)")
+            if case AudioCapture.CaptureError.deviceNotFound = error { inputMissing = true }
         }
         gate.reset()
         silentSince = Date()
@@ -1622,8 +1627,23 @@ final class AppModel {
         refreshDevices()
         // The chosen device came back (USB interface replugged, etc.).
         if wasMissing, let uid = inputDeviceUID, devices.contains(where: { $0.uid == uid }) {
-            restartCapture()
+            inputMissing = false
+            if micSuspended { captureError = nil } else { restartCapture() }
         }
+    }
+
+    /// An interface switched back on (the MOTU M4) can be announced before its inputs are ready, so it isn't an
+    /// input yet when the device list changes and nothing announces it again: while the chosen one is missing, look
+    /// every few seconds.
+    private func checkMissingInput(at now: Date) {
+        guard inputMissing, now.timeIntervalSince(lastMissingCheck) >= 5, let uid = inputDeviceUID else { return }
+        lastMissingCheck = now
+        guard AudioDevices.hardwareInputDevices().contains(where: { $0.uid == uid }) else { return }
+        note("The input is back")
+        refreshDevices()
+        inputMissing = false
+        // With the mic off on purpose, just clear the error: turning it back on starts capture anyway.
+        if micSuspended { captureError = nil } else { restartCapture() }
     }
 
     private func ingest(levelDB db: Double) {
@@ -1694,6 +1714,7 @@ final class AppModel {
             note("Lost touch with \(r.host); listening here again")
         }
         checkAutoPause(at: now)
+        checkMissingInput(at: now)
         players.expireBrowser(at: now)
         noteRecentAudioApps(at: now)
         updateControllablePlayer()
