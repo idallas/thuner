@@ -1417,6 +1417,8 @@ final class AppModel {
     /// The chosen input wasn't there when capture last started.
     @ObservationIgnored private var inputMissing = false
     @ObservationIgnored private var lastMissingCheck = Date.distantPast
+    /// The device list last changed (a missing input is looked for during the minute after).
+    @ObservationIgnored private var devicesChangedAt = Date.distantPast
     @ObservationIgnored private var restartScheduled = false
 
     private func restartCapture() {
@@ -1623,6 +1625,7 @@ final class AppModel {
     }
 
     private func devicesChanged() {
+        devicesChangedAt = Date()
         let wasMissing = captureError != nil
         refreshDevices()
         // The chosen device came back (USB interface replugged, etc.).
@@ -1634,9 +1637,10 @@ final class AppModel {
 
     /// An interface switched back on (the MOTU M4) can be announced before its inputs are ready, so it isn't an
     /// input yet when the device list changes and nothing announces it again: while the chosen one is missing, look
-    /// every few seconds.
+    /// every 5 seconds for a minute after each change to the device list (never while nothing changes).
     private func checkMissingInput(at now: Date) {
-        guard inputMissing, now.timeIntervalSince(lastMissingCheck) >= 5, let uid = inputDeviceUID else { return }
+        guard inputMissing, now.timeIntervalSince(devicesChangedAt) <= 60, now.timeIntervalSince(lastMissingCheck) >= 5,
+              let uid = inputDeviceUID else { return }
         lastMissingCheck = now
         guard AudioDevices.hardwareInputDevices().contains(where: { $0.uid == uid }) else { return }
         note("The input is back")
