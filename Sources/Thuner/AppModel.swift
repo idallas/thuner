@@ -1268,7 +1268,7 @@ final class AppModel {
         streamCipher = StreamCipher(password: streamPassword)
         streamSender.cipher = streamCipher
         // A stream request from an address we don't know may be a known Mac with a new lease (seen 2026-11-16: the
-        // router stopped answering renewals and trithena's Ethernet moved to another address): look again, as a
+        // router stopped answering renewals and a listening Mac's Ethernet moved to another address): look again, as a
         // peer message from it would, rather than ignoring the listener until its next peer message.
         streamSender.isKnownPeer = { [weak self] address in
             MainActor.assumeIsolated {
