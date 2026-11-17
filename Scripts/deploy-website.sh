@@ -18,8 +18,9 @@ if [[ -n ${DOWNLOADS_BUCKET:-} ]]; then
   command -v rclone >/dev/null || { echo "error: install rclone (brew install rclone)" >&2; exit 1; }
   : ${DOWNLOADS_ENDPOINT:=https://s3.us-east-005.dream.io}
   # The bucket's keys come from 1Password (DOWNLOADS_OP_ITEM, fields access-key and secret-key), or from a
-  # keys file (ACCESS_KEY=… and SECRET_KEY=…) if DOWNLOADS_KEYS names one. With ~/.config/op/token (a
-  # service account, as on a headless Mac) op uses that; otherwise the signed-in 1Password app.
+  # keys file (ACCESS_KEY=… and SECRET_KEY=…) if DOWNLOADS_KEYS names one. op uses a service account token
+  # from the login keychain (item op-service-account) or ~/.config/op/token (for a headless Mac, whose
+  # keychain is locked over SSH); otherwise the signed-in 1Password app.
   : ${DOWNLOADS_OP_ITEM:=op://agents/DreamObjects idallas-downloads}
   (
     if [[ -n ${DOWNLOADS_KEYS:-} ]]; then
@@ -27,7 +28,11 @@ if [[ -n ${DOWNLOADS_BUCKET:-} ]]; then
       source "$DOWNLOADS_KEYS"
     else
       command -v op >/dev/null || { echo "error: install the 1Password CLI (brew install 1password-cli), or set DOWNLOADS_KEYS" >&2; exit 1; }
-      [[ -z ${OP_SERVICE_ACCOUNT_TOKEN:-} && -r $HOME/.config/op/token ]] && export OP_SERVICE_ACCOUNT_TOKEN=$(<$HOME/.config/op/token)
+      if [[ -z ${OP_SERVICE_ACCOUNT_TOKEN:-} ]]; then
+        token=$(security find-generic-password -s op-service-account -w 2>/dev/null) ||
+          { [[ -r $HOME/.config/op/token ]] && token=$(<$HOME/.config/op/token); } || token=
+        [[ -n $token ]] && export OP_SERVICE_ACCOUNT_TOKEN=$token
+      fi
       ACCESS_KEY=$(op read "$DOWNLOADS_OP_ITEM/access-key") && SECRET_KEY=$(op read "$DOWNLOADS_OP_ITEM/secret-key") ||
         { echo "error: couldn't read the keys from 1Password ($DOWNLOADS_OP_ITEM)" >&2; exit 1; }
     fi
