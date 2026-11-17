@@ -16,11 +16,21 @@ fi
 # the site redirects /software/thuner/appcast.xml and /software/thuner/updates/… there and counts the downloads.
 if [[ -n ${DOWNLOADS_BUCKET:-} ]]; then
   command -v rclone >/dev/null || { echo "error: install rclone (brew install rclone)" >&2; exit 1; }
-  : ${DOWNLOADS_KEYS:=$HOME/.config/dreamobjects/idallas-downloads}
   : ${DOWNLOADS_ENDPOINT:=https://s3.us-east-005.dream.io}
-  [[ -r $DOWNLOADS_KEYS ]] || { echo "error: no keys file at $DOWNLOADS_KEYS (ACCESS_KEY=… and SECRET_KEY=…)" >&2; exit 1; }
+  # The bucket's keys come from 1Password (DOWNLOADS_OP_ITEM, fields access-key and secret-key), or from a
+  # keys file (ACCESS_KEY=… and SECRET_KEY=…) if DOWNLOADS_KEYS names one. With ~/.config/op/token (a
+  # service account, as on a headless Mac) op uses that; otherwise the signed-in 1Password app.
+  : ${DOWNLOADS_OP_ITEM:=op://agents/DreamObjects idallas-downloads}
   (
-    source "$DOWNLOADS_KEYS"
+    if [[ -n ${DOWNLOADS_KEYS:-} ]]; then
+      [[ -r $DOWNLOADS_KEYS ]] || { echo "error: no keys file at $DOWNLOADS_KEYS" >&2; exit 1; }
+      source "$DOWNLOADS_KEYS"
+    else
+      command -v op >/dev/null || { echo "error: install the 1Password CLI (brew install 1password-cli), or set DOWNLOADS_KEYS" >&2; exit 1; }
+      [[ -z ${OP_SERVICE_ACCOUNT_TOKEN:-} && -r $HOME/.config/op/token ]] && export OP_SERVICE_ACCOUNT_TOKEN=$(<$HOME/.config/op/token)
+      ACCESS_KEY=$(op read "$DOWNLOADS_OP_ITEM/access-key") && SECRET_KEY=$(op read "$DOWNLOADS_OP_ITEM/secret-key") ||
+        { echo "error: couldn't read the keys from 1Password ($DOWNLOADS_OP_ITEM)" >&2; exit 1; }
+    fi
     export RCLONE_CONFIG_DL_TYPE=s3 RCLONE_CONFIG_DL_PROVIDER=Ceph RCLONE_CONFIG_DL_ENDPOINT=$DOWNLOADS_ENDPOINT \
       RCLONE_CONFIG_DL_ACCESS_KEY_ID=$ACCESS_KEY RCLONE_CONFIG_DL_SECRET_ACCESS_KEY=$SECRET_KEY RCLONE_CONFIG_DL_ACL=public-read
     src=$WEBSITE_DIR/thuner dest=dl:$DOWNLOADS_BUCKET/thuner

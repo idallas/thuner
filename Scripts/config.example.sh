@@ -29,5 +29,7 @@
 # the deploy script. The website redirects its old addresses there. Keys live outside the repo in a file with
 # ACCESS_KEY=… and SECRET_KEY=… lines.
 # DOWNLOADS_BUCKET=${DOWNLOADS_BUCKET:-my-downloads}
+# Keys from 1Password (default op://agents/DreamObjects idallas-downloads), or a keys file instead:
+# DOWNLOADS_OP_ITEM=${DOWNLOADS_OP_ITEM:-op://agents/DreamObjects my-downloads}
 # DOWNLOADS_KEYS=${DOWNLOADS_KEYS:-$HOME/.config/dreamobjects/my-downloads}
 # DOWNLOADS_ENDPOINT=${DOWNLOADS_ENDPOINT:-https://s3.us-east-005.dream.io}
