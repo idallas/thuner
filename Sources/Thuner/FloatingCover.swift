@@ -107,6 +107,10 @@ struct FloatingCoverView: View {
                     placeholder
                 }
             }
+            // The window's size whatever the image's shape: a wide one (a YouTube thumbnail) filling it made the
+            // stack wider than the window, which put the close button and the words off its edges.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+            .clipped()
             .gesture(WindowDragGesture())
 
             if hovering {
