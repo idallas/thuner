@@ -1431,6 +1431,8 @@ final class AppModel {
     @ObservationIgnored private var recentRestarts: [Date] = []
     /// The chosen input wasn't there when capture last started.
     @ObservationIgnored private var inputMissing = false
+    /// The chosen input device's name when it was last there (`inputDeviceName`).
+    @ObservationIgnored private var lastInputDeviceName = UserDefaults.standard.string(forKey: "inputDeviceName")
     @ObservationIgnored private var lastMissingCheck = Date.distantPast
     /// The device list last changed (a missing input is looked for during the minute after).
     @ObservationIgnored private var devicesChangedAt = Date.distantPast
@@ -1464,17 +1466,28 @@ final class AppModel {
             try capture.start(config)
             captureError = nil
             captureNotice = nil
+            // Remembered for when it's gone: the panel names it rather than showing its UID.
+            if !usingSystemAudio, let name = capture.activeDeviceName, name != lastInputDeviceName {
+                lastInputDeviceName = name
+                save(name, "inputDeviceName")
+            }
             let name = selectedInputName.map { "\($0) (\(capture.activeDeviceName ?? "input"))" }
             note("Listening to \(usingSystemAudio ? systemAudioLabel : name ?? capture.activeDeviceName ?? "default input")")
         } catch AudioCapture.CaptureError.waitingForApps {
             captureError = nil
             captureNotice = "Waiting for \(systemAudioApps.map(\.name).joined(separator: " or ")) to play"
             note(captureNotice!)
+        } catch AudioCapture.CaptureError.deviceNotFound {
+            // Unplugged or switched off (a display's mic with another display connected, an interface that's off):
+            // not an error, and capture starts again when it's back (devicesChanged, checkMissingInput).
+            inputMissing = true
+            captureError = nil
+            captureNotice = "\(missingInputName) isn't connected; ThUNER listens again when it's back"
+            note("\(missingInputName) isn't connected; waiting for it")
         } catch {
             captureError = error.localizedDescription
             captureNotice = nil
             note("Capture failed: \(error.localizedDescription)")
-            if case AudioCapture.CaptureError.deviceNotFound = error { inputMissing = true }
         }
         gate.reset()
         silentSince = Date()
@@ -1641,12 +1654,12 @@ final class AppModel {
 
     private func devicesChanged() {
         devicesChangedAt = Date()
-        let wasMissing = captureError != nil
+        let wasMissing = inputMissing || captureError != nil
         refreshDevices()
         // The chosen device came back (USB interface replugged, etc.).
         if wasMissing, let uid = inputDeviceUID, devices.contains(where: { $0.uid == uid }) {
             inputMissing = false
-            if micSuspended { captureError = nil } else { restartCapture() }
+            if micSuspended { clearMissingInput() } else { restartCapture() }
         }
     }
 
@@ -1662,7 +1675,22 @@ final class AppModel {
         refreshDevices()
         inputMissing = false
         // With the mic off on purpose, just clear the error: turning it back on starts capture anyway.
-        if micSuspended { captureError = nil } else { restartCapture() }
+        if micSuspended { clearMissingInput() } else { restartCapture() }
+    }
+
+    private func clearMissingInput() {
+        captureError = nil
+        captureNotice = nil
+    }
+
+    /// The chosen input's name while it's missing: the name given to it, else the device's as last seen.
+    private var missingInputName: String {
+        let uid = inputDeviceUID ?? ""
+        let given = [firstChannel, 0].lazy.compactMap { self.inputNames["\(uid)#\($0)"] }.first { !$0.isEmpty }
+        // A USB device's UID names it: "AppleUSBAudioEngine:Apple Inc.:Studio Display:…" → "Studio Display".
+        let parts = uid.split(separator: ":")
+        let fromUID = uid.hasPrefix("AppleUSBAudioEngine:") && parts.count > 2 ? String(parts[2]) : nil
+        return given ?? lastInputDeviceName ?? fromUID ?? "The chosen input"
     }
 
     private func ingest(levelDB db: Double) {
