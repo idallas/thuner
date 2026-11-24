@@ -402,20 +402,22 @@ final class AppModel {
             if !webDisplayEnabled { webDisplay.stop() } else if networkStarted { startWebDisplay() }
         }
     }
-    /// Only this Mac can reach the web display and API (for a laptop on other people's networks, say).
-    var webDisplayLocalOnly: Bool {
+    /// Who can reach the web display and API: this Mac only (a laptop on other people's networks, say), this
+    /// Mac's local network (the default: not through a VPN such as a work VPN or Tailscale), or anywhere.
+    var webDisplayReach: WebDisplayServer.Reach {
         didSet {
-            save(webDisplayLocalOnly, "webDisplayLocalOnly")
+            save(webDisplayReach.rawValue, "webDisplayReach")
             if webDisplayEnabled, networkStarted { startWebDisplay() }
         }
     }
+    var webDisplayLocalOnly: Bool { webDisplayReach == .thisMac }
     @ObservationIgnored let webDisplay = WebDisplayServer()
 
     private func startWebDisplay() {
         webDisplay.activityProvider = { after, level, limit in ActivityStore.shared.entries(after: after, level: level, limit: limit) }
         let web = webDisplay
         ActivityStore.shared.onEntry = { entry in web.activityEvent(entry) }
-        webDisplay.start(port: WebDisplayServer.defaultPort, localOnly: webDisplayLocalOnly)
+        webDisplay.start(port: WebDisplayServer.defaultPort, reach: webDisplayReach)
     }
 
     /// Token for changing things through the HTTP API from other devices (this Mac doesn't need it).
@@ -1131,7 +1133,9 @@ final class AppModel {
         onboardingComplete = d.bool(forKey: "onboardingComplete")
             || ["role", "inputDeviceUID", "lastDisplayed", "scrobblingEnabled"].contains { d.object(forKey: $0) != nil }
         webDisplayEnabled = d.object(forKey: "webDisplayEnabled") as? Bool ?? true
-        webDisplayLocalOnly = d.bool(forKey: "webDisplayLocalOnly")
+        // "This Mac only" used to be a switch of its own.
+        webDisplayReach = d.string(forKey: "webDisplayReach").flatMap(WebDisplayServer.Reach.init(rawValue:))
+            ?? (d.bool(forKey: "webDisplayLocalOnly") ? .thisMac : .localNetwork)
         twistCommandoEnabled = d.object(forKey: "twistCommandoEnabled") as? Bool ?? true
         micEnabled = d.object(forKey: "micEnabled") as? Bool ?? true
         let paused = d.bool(forKey: "pausedManually")

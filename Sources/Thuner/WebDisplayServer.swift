@@ -74,14 +74,28 @@ final class WebDisplayServer: @unchecked Sendable {
     private(set) var port: UInt16 = defaultPort
     var isRunning: Bool { listener != nil }
 
-    /// - Parameter localOnly: listen on loopback only, so nothing else on the network can reach the server.
-    func start(port: UInt16, localOnly: Bool = false) {
+    /// Who may connect.
+    enum Reach: String, CaseIterable {
+        /// Loopback only, so nothing else can reach the server.
+        case thisMac
+        /// This Mac and the subnets of its own Ethernet and Wi-Fi: not through a VPN or tunnel (a work VPN,
+        /// Tailscale), nor from anywhere routed further.
+        case localNetwork
+        /// Anything that can reach this Mac.
+        case anywhere
+    }
+
+    private var reach = Reach.localNetwork
+    private var lastRefusalLog = Date.distantPast
+
+    func start(port: UInt16, reach: Reach = .localNetwork) {
         stop()
         self.port = port
+        self.reach = reach
         do {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = true
-            if localOnly {
+            if reach == .thisMac {
                 parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!)
             }
             let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
@@ -166,12 +180,74 @@ final class WebDisplayServer: @unchecked Sendable {
     private static let requestTimeout: TimeInterval = 10
 
     private func accept(_ connection: NWConnection) {
+        if reach == .localNetwork, !Self.isOnLocalNetwork(connection.endpoint) {
+            // Closed without an answer: nothing to say to a stranger, not even that ThUNER is here.
+            if Date().timeIntervalSince(lastRefusalLog) > 600 {
+                lastRefusalLog = Date()
+                log.notice("Refused a web connection from \(String(describing: connection.endpoint)): not on this Mac's local network (Settings → Display → Reachable from)")
+            }
+            connection.cancel()
+            return
+        }
         connection.start(queue: queue)
         let pending = Pending()
         queue.asyncAfter(deadline: .now() + Self.requestTimeout) {
             if !pending.answered { connection.cancel() }
         }
         read(connection, buffer: Data(), pending: pending)
+    }
+
+    /// Whether a client is this Mac or on the subnet of one of its Ethernet or Wi-Fi interfaces (`LocalNetwork`).
+    static func isOnLocalNetwork(_ endpoint: NWEndpoint) -> Bool {
+        guard case .hostPort(let host, _) = endpoint else { return false }
+        switch host {
+        case .ipv4(let address):
+            return LocalNetwork.contains(Array(address.rawValue), interfaces: interfaces())
+        case .ipv6(let address):
+            return LocalNetwork.contains(Array(address.rawValue), scope: address.interface?.name, interfaces: interfaces())
+        default:
+            return false
+        }
+    }
+
+    /// This Mac's interfaces that are up, with their addresses and netmasks.
+    static func interfaces() -> [LocalNetwork.Interface] {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return [] }
+        defer { freeifaddrs(list) }
+        func bytes(_ pointer: UnsafeMutablePointer<sockaddr>?) -> [UInt8]? {
+            guard let pointer else { return nil }
+            switch Int32(pointer.pointee.sa_family) {
+            case AF_INET:
+                return pointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    withUnsafeBytes(of: $0.pointee.sin_addr) { Array($0) }
+                }
+            case AF_INET6:
+                return pointer.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) {
+                    withUnsafeBytes(of: $0.pointee.sin6_addr) { Array($0) }
+                }
+            default:
+                return nil
+            }
+        }
+        var found: [LocalNetwork.Interface] = []
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let entry = pointer.pointee
+            let flags = Int32(entry.ifa_flags)
+            guard flags & IFF_UP != 0, let address = bytes(entry.ifa_addr) else { continue }
+            // The netmask's family field isn't always set; it has the address's length.
+            var mask: [UInt8] = []
+            if let netmask = entry.ifa_netmask {
+                let length = address.count == 4 ? MemoryLayout<sockaddr_in>.size : MemoryLayout<sockaddr_in6>.size
+                let offset = address.count == 4 ? MemoryLayout.offset(of: \sockaddr_in.sin_addr)! : MemoryLayout.offset(of: \sockaddr_in6.sin6_addr)!
+                let raw = UnsafeRawPointer(netmask)
+                let available = min(Int(netmask.pointee.sa_len), length)
+                mask = (0..<address.count).map { i in offset + i < available ? raw.load(fromByteOffset: offset + i, as: UInt8.self) : 0 }
+            }
+            found.append(LocalNetwork.Interface(name: String(cString: entry.ifa_name), address: address, netmask: mask,
+                                                isPointToPoint: flags & IFF_POINTOPOINT != 0))
+        }
+        return found
     }
 
     /// The most a request (headers and body) may be. Anything bigger is dropped.

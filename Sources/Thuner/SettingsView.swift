@@ -228,9 +228,10 @@ struct SettingsView: View {
                     Section {
                         Toggle("Web display", isOn: $model.webDisplayEnabled)
                         if model.webDisplayEnabled {
-                            Picker("Reachable from", selection: $model.webDisplayLocalOnly) {
-                                Text("Any device on the network").tag(false)
-                                Text("This Mac only").tag(true)
+                            Picker("Reachable from", selection: $model.webDisplayReach) {
+                                Text("This Mac only").tag(WebDisplayServer.Reach.thisMac)
+                                Text("Devices on the local network").tag(WebDisplayServer.Reach.localNetwork)
+                                Text("Anywhere, including over VPNs").tag(WebDisplayServer.Reach.anywhere)
                             }
                             LabeledContent("Address") {
                                 Text(model.webDisplayURL.absoluteString).textSelection(.enabled)
@@ -243,7 +244,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Web display")
                     } footer: {
-                        Text("What's playing, in any browser on your network. M switches between the Tuneshine look and a large cover, F goes full screen. The Control API (Controls) uses the same server.")
+                        Text("What's playing, in any browser on your network. \"Local network\" turns away anything that comes through a VPN (a work VPN, Tailscale) or from further away; other Macs and the Tuneshine need the server reachable. M switches between the Tuneshine look and a large cover, F goes full screen. The Control API (Controls) uses the same server.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
