@@ -36,7 +36,7 @@ Goal: one SwiftUI menu bar app that runs on both Macs, configured per machine.
 - `POST /image` JSON `{imageUrl, trackName, artistName, albumName, serviceName, itemId, timeoutMs}` shows art and overrides the cloud feed until `DELETE /image`, which reverts to the cloud/idle view (what "Clear Tuneshine" does).
 - Preferred push: download a 64x64 WebP from Apple's CDN (rewrite mzstatic `/{w}x{h}bb.{ext}` to `/64x64bb.webp`) and upload it as multipart `image` + `metadata` JSON. Uploads must be WebP (PNG/JPEG get HTTP 400). Artwork lookups prefer iTunes/mzstatic, even for Spotify tracks, so this path is almost always available.
 - Fallback for non-Apple artwork: `imageUrl` JSON push. The device fetches it itself and fails roughly 1 in 3 times (`FETCH_DEADLINE_ERROR`, `HTTP_TRUNCATED_ERROR`) while still returning 200, so Thuner checks `localMetadata.lastImageError` in `GET /state` and retries.
-- Failed pushes are retried by the app after 20s, up to 3 rounds. `lastDisplayed` (restored at launch) is only saved once the device confirms a push or clear.
+- Failed pushes are retried by the app after 20s, up to 3 rounds. `lastDisplayed` is only saved once the device confirms a push or clear. What the panel showed is saved separately (`localDisplayed`, with `localDisplayedAt`) and restored at launch, so it doesn't need a Tuneshine; the other Mac's last cover (`remoteLastTrack`) only wins if it's more recent.
 - The device can take >10s to answer `/state` while busy; use generous timeouts.
 - Resolve `.local` to IPv4 before connecting (device has no IPv6).
 - Artwork: rewrite mzstatic `/{w}x{h}bb.` to 300x300 and use http.

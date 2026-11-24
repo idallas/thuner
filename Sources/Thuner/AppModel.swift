@@ -1219,8 +1219,10 @@ final class AppModel {
         }
         applyTiming()
 
-        // The Tuneshine keeps showing Thuner's last image across a relaunch, so show it here too (no re-push).
-        if let data = d.data(forKey: "lastDisplayed"), let track = try? JSONDecoder().decode(Track.self, from: data) {
+        // What this Mac showed when it quit, back on screen (no push: a Tuneshine kept showing it). Saved on its own,
+        // so it doesn't need a Tuneshine; copies from before that was saved fall back to the Tuneshine's.
+        let shown = d.object(forKey: "localDisplayed") != nil ? d.data(forKey: "localDisplayed") : d.data(forKey: "lastDisplayed")
+        if let data = shown, let track = try? JSONDecoder().decode(Track.self, from: data) {
             machine.displayedExternally(track)
             logger.notice("Restored last cover: \(track.displayName)")
             clearAfterQuietSince = Date()
@@ -1228,8 +1230,8 @@ final class AppModel {
             // recent track wins until something plays here.
             lastLocalDisplayed = track
         }
-        // Whether or not the Tuneshine's cover was kept (it may have been cleared, or been out of reach): without
-        // it, this Mac's last play counted as never, and the other Mac's last cover came back however old it was.
+        // Even with nothing to show (cleared after a quiet spell), or this Mac's last play would count as never
+        // and the other Mac's last cover would come back however old it was.
         localDisplayedAt = d.object(forKey: "localDisplayedAt") as? Date ?? Date.distantPast
         if let data = d.data(forKey: "remoteLastTrack"), let track = try? JSONDecoder().decode(Track.self, from: data),
            let at = d.object(forKey: "remoteLastTrackAt") as? Date {
@@ -2604,6 +2606,8 @@ final class AppModel {
         if machine.displayed != lastLocalDisplayed {
             lastLocalDisplayed = machine.displayed
             if machine.displayed != nil { localDisplayedAt = now }
+            // For the next launch; empty data once cleared, so a cleared cover doesn't come back.
+            defaults.set(machine.displayed.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: "localDisplayed")
         }
         if let track = shownTrack, track != lastShownTrack {
             notifyIfNewSong(track, after: lastShownTrack)
