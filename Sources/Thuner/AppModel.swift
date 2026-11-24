@@ -1224,11 +1224,13 @@ final class AppModel {
             machine.displayedExternally(track)
             logger.notice("Restored last cover: \(track.displayName)")
             clearAfterQuietSince = Date()
-            // Restoring it isn't showing it anew: keep when it was really shown, so the other Mac's more recent
-            // track (below) wins until something plays here.
+            // Restoring it isn't showing it anew: keep when it was really shown (below), so the other Mac's more
+            // recent track wins until something plays here.
             lastLocalDisplayed = track
-            localDisplayedAt = d.object(forKey: "localDisplayedAt") as? Date ?? Date.distantPast
         }
+        // Whether or not the Tuneshine's cover was kept (it may have been cleared, or been out of reach): without
+        // it, this Mac's last play counted as never, and the other Mac's last cover came back however old it was.
+        localDisplayedAt = d.object(forKey: "localDisplayedAt") as? Date ?? Date.distantPast
         if let data = d.data(forKey: "remoteLastTrack"), let track = try? JSONDecoder().decode(Track.self, from: data),
            let at = d.object(forKey: "remoteLastTrackAt") as? Date {
             remoteLastTrack = (track, at)
